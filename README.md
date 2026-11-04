@@ -1,24 +1,42 @@
-# 🚚 Intelligens fuvar- és rakománykalkulátor
+# 🚚 Fuvardíjkalkulátor 3.0 – rakománytervező
 
-Magyar nyelvű Streamlit alkalmazás fuvarszervezőknek: rakományméter (LDM), halmozhatóság,
-rakodási helyigény és becsült fuvardíj kiszámítása.
+Magyar nyelvű Streamlit alkalmazás fuvarszervezőknek: elméleti, fizikai, tömegalapú és elszámolási
+rakományméter (LDM), optimalizált raklapelrendezés, halmozási ellenőrzés, fuvarozónak küldhető
+rakodási terv és fuvardíj-becslés.
 
 ## Funkciók
 
-- **Rakománycsoportok** – tetszőleges számú csoport felvétele és törlése (vegyes halmozhatóság).
-- **Szabványos raklapok** (EUR 120×80, ipari 120×100, fél 80×60) automatikus méretkitöltéssel,
-  vagy teljesen egyedi rakományméret.
-- **Halmozás** 1–4 szinten vagy egyedi szintszámmal; ellenőrzi a belmagasságot és a ráterhelhetőséget,
-  és ha a kért halmozás nem biztonságos, a legnagyobb megengedett szinttel számol.
-- **Elméleti LDM és tényleges helyigény** elkülönítve: soros rakodási elrendezés (hosszirányban /
-  elforgatva), felülnézeti vázlattal.
-- **Fuvardíj** EUR vagy HUF / LDM alapon, minimumdíjjal, felárakkal (útdíj, üzemanyag-pótdíj,
-  várakozás, egyéb), haszonkulccsal **vagy** árréssel – a két fogalom külön kezelve.
-- **Figyelmeztetések**: túl magas rakomány, teherbírás túllépése, nem megengedett halmozás,
-  el nem férő méret, nem igazolható berakhatóság.
-- **CSV-export** (pontosvessző, tizedesvessző, UTF-8 BOM – Excelben közvetlenül megnyitható).
+- **Pótkocsitípusok** (cm): Normál 1360 × 245 × 270, Semi-mega 1360 × 245 × 285, Mega 1360 × 245 × 300,
+  vagy egyedi méret; a ténylegesen szabad rakodótér külön megadható.
+- **Rakománycsoportok**: darabszám, méret (cm), tömeg egységenként vagy összesen, halmozhatóság
+  (nem / 2 / 3 / 4 / egyedi szint), 90°-os forgathatóság, halomban eltérő tájolás, alsó egység
+  megengedett felső terhelése. Különböző méretű egységek együtt is kezelhetők.
+- **Elméleti LDM** = darab × hossz × szélesség ÷ (245 × 100) – területalapú alsó becslés.
+- **Fizikai LDM**: kétdimenziós téglalap-elhelyezés (2D strip packing) – heurisztikák, alsó korlát és
+  idő­korlátos pontos keresés. A bizonyított optimumot és a közelítő megoldást egyértelműen megkülönbözteti.
+- **Tömegalapú és elszámolási LDM**: össztömeg ÷ 1750 kg/LDM (módosítható), elszámolási LDM =
+  MAX(fizikai, tömegalapú), konfigurálható kerekítéssel.
+- **Halmozás**: halommagasság, belmagasság, ráterhelés, túlnyúlás, felváltva forgatott halmozás;
+  hiányzó adatnál „Nem igazolt” állapot.
+- **Felülnézeti rakodási ábra** (méretarányos): lefedett terület, szabad területek, felhasznált sáv,
+  kihasználtság, elhelyezési koordináták, automatikus átfedés-ellenőrzés.
+- **Tervezett / visszaigazolt / tényleges LDM** külön kezelve, eltérésekkel és indokkal.
+- **Rakodási terv export** (nyomtatható HTML, visszaigazolási mezőkkel) és CSV-k.
+- **Fuvardíj**: EUR vagy HUF / LDM, minimumdíj, felárak, haszonkulcs vagy árrés.
 
-## Telepítés és futtatás helyben
+## Használati útmutató (röviden)
+
+1. Oldalsáv: válassza ki a pótkocsitípust; szükség esetén adja meg az eltérő szabad rakodóteret,
+   az elszámolási indexet és a kerekítést.
+2. **Rakomány** fül: vegye fel a rakománycsoportokat (vagy töltsön be egy példát). A jobb oldali
+   eredménypanel és alatta a rakodási terv minden módosításkor újraszámolódik.
+3. **Visszaigazolás** fül: töltse le a rakodási tervet, küldje el a fuvarozónak, majd rögzítse a
+   visszaigazolt és a rakodás utáni tényleges LDM-et.
+4. **Fuvardíj** fül: válassza ki a díj LDM-alapját (alapértelmezés: elszámolási LDM) és a díjtételeket.
+
+Részletes leírás az alkalmazás **Útmutató** fülén.
+
+## Telepítés és futtatás
 
 ```bash
 python -m venv .venv
@@ -27,37 +45,44 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-A böngészőben a `http://localhost:8501` címen nyílik meg.
-
 ## Tesztek
 
 ```bash
-python tests/test_kalkulacio.py
+pip install -r requirements-dev.txt
+python -m pytest tests
 ```
 
-(vagy `pytest`, ha telepítve van)
+A tesztek lefedik az A és B referenciapéldát (240 cm, 210 cm), a díjpéldákat (2,00 és 4,00 LDM),
+a forgatást, az átfedések kizárását, a határok betartását, a halmozási korlátokat, a kerekítést és
+– a Streamlit `AppTest` segítségével – az eredmények megjelenítését a felületen.
 
-## Közzététel Streamlit Community Cloudon
+## Streamlit Community Cloud
 
-1. Töltse fel a mappa tartalmát egy GitHub-tárolóba.
-2. A [share.streamlit.io](https://share.streamlit.io) oldalon: **Create app** → válassza ki a tárolót,
-   az ágat és fő fájlként az `app.py`-t.
-3. Frissítés: a GitHubra feltöltött (push) változások után az alkalmazás automatikusan újraépül.
+A tároló közvetlenül telepíthető: **Create app** → tároló, `main` ág, fő fájl: `app.py`.
 
-## Fájlszerkezet
+## Modulok
 
 | Fájl | Tartalom |
 |---|---|
 | `app.py` | Streamlit felület |
-| `kalkulacio.py` | Számítási logika (Streamlit-független, újrahasznosítható) |
-| `tests/test_kalkulacio.py` | A számítások tesztjei |
-| `.streamlit/config.toml` | Színtéma |
-| `requirements.txt` | Függőségek |
+| `trailer_config.py` | Pótkocsitípusok, szabad rakodótér |
+| `cargo_models.py` | Rakományadatok, validáció |
+| `stacking_validator.py` | Halmozási korlátok |
+| `packing_optimizer.py` | Geometriai elhelyezés (2D strip packing) |
+| `ldm_calculator.py` | Elméleti, fizikai, tömegalapú, elszámolási LDM |
+| `billing_config.py` | Elszámolási index és kerekítési szabályok |
+| `load_planner.py` | A rakodási terv összeállítása |
+| `ldm_tracking.py` | Tervezett / visszaigazolt / tényleges LDM |
+| `visualization.py` | Felülnézeti SVG-ábra |
+| `load_plan_export.py` | Fuvarozói rakodási terv (HTML) |
+| `pricing.py` | Fuvardíj-becslés |
+| `tests/` | Automatizált tesztek |
 
-## Bővítési ötletek
+## Korlátok és továbbfejlesztés
 
-`kalkulacio.py` tiszta adatszerkezetekre épül (`RakomanyCsoport`, `Potkocsi`, `DijParameterek`),
-így könnyen bővíthető pl. tengelyterhelés-számítással, kg/m³-alapú díjazással, árfolyam-átváltással
-vagy több járműtípus összehasonlításával.
+Nem modellezett: tengelyterhelés, rakományrögzítés, rakodási sorrend, különböző csoportok egymásra
+helyezése, több megbízó árujának együttes elhelyezése. A következő tervezett lépés egy AI-alapú
+ajánlatkérés-feldolgozó, amely a beillesztett ügyfélszövegből nyeri ki a rakományadatokat ehhez a
+számítómotorhoz (még nincs megvalósítva).
 
-> Az eredmények tájékoztató jellegű becslések, nem helyettesítik a rakodási tervet és a fuvarozói ajánlatot.
+> Az eredmények tervezési becslések; a tervezett LDM a fuvarozó írásos visszaigazolásáig nem garantált.
