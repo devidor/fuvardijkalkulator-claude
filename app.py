@@ -7,7 +7,16 @@ from __future__ import annotations
 
 import html
 from datetime import date, datetime
+from pathlib import Path
+import json
+import hashlib
+from dataclasses import asdict
+from pdf_export import ajanlat_pdf
+from tracking_history import uj_bejegyzes, beolvas_naplo
+from legacy_examples import PELDÁK
+from legacy_tariffs import TARIFAK
 
+from visualization_3d import terv_3d
 import pandas as pd
 import streamlit as st
 
@@ -24,7 +33,7 @@ from trailer_config import (
 from visualization import rakodasi_svg, szin
 
 st.set_page_config(
-    page_title="Fuvar- és rakománykalkulátor",
+    page_title="FuvarDíj 4.0 | Rakománytervező",
     page_icon="🚚",
     layout="wide",
     initial_sidebar_state="auto",
@@ -60,7 +69,7 @@ ARAZAS_ARRES = "Árrés (eladási árra vetítve)"
 
 CSOPORT_ALAP = {
     "nev": "Rakomány",
-    "mod": MOD_SZABVANYOS,
+    "mod": MOD_EGYEDI,
     "tipus": "EUR-raklap (120 × 80 cm)",
     "hossz": 120.0,
     "szel": 80.0,
@@ -75,6 +84,7 @@ CSOPORT_ALAP = {
     "raterheles": 0.0,
     "forgathato": True,
     "valtakozo": False,
+    "raklap_alap": False, "raklap_hossz": 120.0, "raklap_szel": 80.0,
 }
 
 EUR = "EUR-raklap (120 × 80 cm)"
@@ -293,7 +303,7 @@ def pakolo(tetelek, hossz_cm, szelesseg_cm, idokorlat_s):
 st.markdown(
     """
 <div class="app-fejlec">
-  <h1>🚚 Intelligens fuvar- és rakománykalkulátor</h1>
+  <h1>🚚 FuvarDíj 4.0 · Rakománytervező</h1>
   <p>Elméleti, fizikai, tömegalapú és elszámolási LDM · optimalizált raklapelrendezés · rakodási terv a fuvarozónak.</p>
 </div>
 """,
@@ -308,14 +318,14 @@ with st.sidebar:
         help="A típus kiválasztásakor a névleges belső méretek automatikusan betöltődnek.",
     )
     egyedi_pk = st.session_state.pk_tipus == EGYEDI_TIPUS
-    st.number_input("Belső hossz (cm)", min_value=100.0, max_value=2500.0, step=10.0, format="%.0f",
-                    key="pk_hossz", disabled=not egyedi_pk)
-    st.number_input("Belső szélesség (cm)", min_value=100.0, max_value=350.0, step=1.0, format="%.0f",
-                    key="pk_szel", disabled=not egyedi_pk,
+    st.number_input("Belső hossz (cm)", min_value=100.0, max_value=2500.0, step=10.0, format="%.1f",
+                    key="pk_hossz", disabled=False)
+    st.number_input("Belső szélesség (cm)", min_value=100.0, max_value=350.0, step=1.0, format="%.1f",
+                    key="pk_szel", disabled=False,
                     help="Az elméleti LDM osztója (szélesség × 100) és az elhelyezés szélességi korlátja.")
-    st.number_input("Belső magasság (cm)", min_value=50.0, max_value=450.0, step=5.0, format="%.0f",
-                    key="pk_mag", disabled=not egyedi_pk)
-    st.number_input("Hasznos teherbírás (kg)", min_value=100.0, max_value=60000.0, step=500.0, format="%.0f",
+    st.number_input("Belső magasság (cm)", min_value=50.0, max_value=450.0, step=5.0, format="%.1f",
+                    key="pk_mag", disabled=False)
+    st.number_input("Hasznos teherbírás (kg)", min_value=100.0, max_value=60000.0, step=500.0, format="%.1f",
                     key="pk_teherbiras")
     st.checkbox(
         "A szabad rakodótér eltér a névlegestől", key="pk_szabad",
@@ -332,6 +342,8 @@ with st.sidebar:
             key="kg_per_ldm",
             help="Díjszámítási tömegegyenérték: tömegalapú LDM = össztömeg ÷ index. Nem azonos a jármű terhelhetőségével.",
         )
+        st.selectbox("Elszámolási szabály", ["maximum", "fizikai", "tömeg"], key="elszam_szabaly",
+                     format_func=lambda x: {"maximum":"Fizikai és tömegalapú közül a nagyobb", "fizikai":"Csak fizikai LDM", "tömeg":"Csak tömegalapú LDM"}[x])
         st.selectbox("Elszámolási LDM kerekítése", list(KEREKITESI_SZABALYOK), key="kerekites")
     with st.expander("⚙️ Optimalizálás"):
         st.slider(
@@ -359,11 +371,11 @@ if pk_hibak:
     for h in pk_hibak:
         st.error(h)
     st.stop()
-cfg = ElszamolasiKonfig(kg_per_ldm=float(ss.kg_per_ldm), kerekites=ss.kerekites)
+cfg = ElszamolasiKonfig(kg_per_ldm=float(ss.kg_per_ldm), kerekites=ss.kerekites, szabaly=ss.elszam_szabaly)
 
 osszegzo_hely = st.container()
-tab_rakomany, tab_visszaig, tab_dij, tab_eredmeny, tab_sugo = st.tabs(
-    ["📦 Rakomány", "✅ Visszaigazolás", "💶 Fuvardíj", "📊 Összesítő", "ℹ️ Útmutató"]
+tab_rakomany, tab_visszaig, tab_dij, tab_eredmeny, tab_teszt, tab_sugo = st.tabs(
+    ["📦 Rakomány", "✅ Visszaigazolás", "💶 Fuvardíj", "📊 Összesítő", "🧪 Tesztek és eredmények", "ℹ️ Útmutató"]
 )
 
 # ---------------------------------------------------------------------------
@@ -390,44 +402,41 @@ def csoport_urlap(gid: int, sorszam: int) -> tuple[RakomanyCsoport | None, st.de
             )
             szabvany = RAKLAP_TIPUSOK.get(ss[k("tipus", gid)])
 
-        m1, m2, m3 = st.columns(3)
-        m1.number_input("Hosszúság (cm)", min_value=1.0, max_value=2000.0, step=1.0, format="%.0f", key=k("hossz", gid))
-        m2.number_input("Szélesség (cm)", min_value=1.0, max_value=500.0, step=1.0, format="%.0f", key=k("szel", gid))
-        m3.number_input("Magasság (cm)", min_value=1.0, max_value=500.0, step=1.0, format="%.0f", key=k("mag", gid),
-                        help="Egy rakományegység teljes magassága (raklappal együtt).")
-
-        d1, d2 = st.columns(2)
-        d1.number_input("Darabszám", min_value=1, max_value=10000, step=1, key=k("darab", gid))
-        d2.radio("Tömeg megadása", [SULY_EGYSEG, SULY_OSSZES], key=k("suly_mod", gid), horizontal=True)
+        # Sorrend: darabszám, hosszúság, szélesség, magasság, súly, halmozhatóság.
+        st.number_input("Darabszám (db)", min_value=1, max_value=10000, step=1, key=k("darab", gid))
+        st.number_input("Hosszúság (cm)", min_value=1.0, max_value=2000.0, step=0.1, format="%.1f", key=k("hossz", gid))
+        st.number_input("Szélesség (cm)", min_value=1.0, max_value=500.0, step=0.1, format="%.1f", key=k("szel", gid))
+        st.number_input("Magasság (cm)", min_value=1.0, max_value=500.0, step=0.1, format="%.1f", key=k("mag", gid))
+        st.radio("Súly értelmezése", [SULY_EGYSEG, SULY_OSSZES], key=k("suly_mod", gid), horizontal=True)
         darab = int(ss[k("darab", gid)])
         if ss[k("suly_mod", gid)] == SULY_EGYSEG:
-            d2.number_input("Egy egység tömege (kg)", min_value=0.1, max_value=50000.0, step=10.0, format="%.1f",
-                            key=k("suly", gid))
+            st.number_input("Súly (kg) / egység", min_value=0.1, max_value=50000.0, step=10.0, key=k("suly", gid))
             suly = float(ss[k("suly", gid)])
-            d2.caption(f"Össztömeg: {szam(suly * darab, 0)} kg")
+            st.caption(f"Össztömeg: {szam(suly * darab, 1)} kg")
         else:
-            d2.number_input("A csoport teljes tömege (kg)", min_value=0.1, max_value=500000.0, step=50.0,
-                            format="%.1f", key=k("ossz_suly", gid))
+            st.number_input("Súly (kg) / összes darab", min_value=0.1, max_value=500000.0, step=50.0, key=k("ossz_suly", gid))
             suly = float(ss[k("ossz_suly", gid)]) / darab
-            d2.caption(f"Egységenként: {szam(suly, 1)} kg")
-
-        h1, h2 = st.columns(2)
-        h1.selectbox("Halmozhatóság", list(SZINT_OPCIOK), key=k("szint_opcio", gid))
+            st.caption(f"Egységenként: {szam(suly, 1)} kg")
+        st.selectbox("Halmozhatóság", list(SZINT_OPCIOK), key=k("szint_opcio", gid))
         szint = SZINT_OPCIOK[ss[k("szint_opcio", gid)]]
         if szint is None:
-            h1.number_input("Maximális szintszám", min_value=1, max_value=20, step=1, key=k("szint_egyedi", gid))
+            st.number_input("Maximális szintszám", min_value=1, max_value=20, step=1, key=k("szint_egyedi", gid))
             szint = int(ss[k("szint_egyedi", gid)])
-        h2.checkbox("90°-kal elforgatható (alapterületen)", key=k("forgathato", gid))
         raterheles = None
-        if szint > 1:
-            h2.checkbox("Halomban eltérő tájolás megengedett", key=k("valtakozo", gid),
-                        help="Felváltva 90°-kal forgatott egységek a halomban. A program kiértékeli, "
-                        "de nem tekinti automatikusan biztonságosnak.")
-            h2.checkbox("Alsó egység felső terhelhetősége ismert", key=k("raterheles_ismert", gid))
+        with st.expander("További rakodási beállítások"):
+            st.checkbox("90°-kal elforgatható (alapterületen)", key=k("forgathato", gid))
+            st.checkbox("Halomban eltérő tájolás megengedett", key=k("valtakozo", gid))
+            st.caption("Az eltérő tájolás kompatibilitását elemezzük; a terv azonos tájolású halmokat használ.")
+            st.checkbox("Alsó egység felső terhelhetősége ismert", key=k("raterheles_ismert", gid))
             if ss[k("raterheles_ismert", gid)]:
-                h2.number_input("Megengedett felső terhelés (kg)", min_value=0.0, max_value=100000.0, step=50.0,
-                                format="%.0f", key=k("raterheles", gid))
+                st.number_input("Megengedett felső terhelés (kg)", min_value=0.0, max_value=100000.0, step=50.0, key=k("raterheles", gid))
                 raterheles = float(ss[k("raterheles", gid)])
+            st.checkbox("Raklap alátámasztási méretének megadása", key=k("raklap_alap", gid))
+            if ss[k("raklap_alap", gid)]:
+                st.number_input("Raklap hossza (cm)", min_value=1.0, max_value=2000.0, key=k("raklap_hossz", gid))
+                st.number_input("Raklap szélessége (cm)", min_value=1.0, max_value=500.0, key=k("raklap_szel", gid))
+                szabvany = (ss[k("raklap_hossz", gid)], ss[k("raklap_szel", gid)])
+            st.caption("A fő méretmezők a túlnyúlással együtt értendők; azt nem adjuk hozzá még egyszer.")
 
         tipus = ss[k("tipus", gid)] if ss[k("mod", gid)] == MOD_SZABVANYOS else "Egyedi rakomány"
         cs = RakomanyCsoport(
@@ -480,7 +489,7 @@ with tab_rakomany:
             st.info("Nincs rakománycsoport. Adjon hozzá legalább egyet a számításhoz.")
         st.button("➕ Új rakománycsoport hozzáadása", on_click=csoport_hozzaad, type="primary", width="stretch")
 
-    if csoportok:
+    if csoportok and not hibas_csoportok:
         try:
             terv = tervez(csoportok, pk, cfg, float(ss.idokorlat), pakolo=pakolo)
         except ValueError as exc:
@@ -541,16 +550,24 @@ with tab_rakomany:
     # Rakodási terv – teljes szélességben
     if terv and terv.pakolas.elhelyezesek:
         p = terv.pakolas
+        st.markdown("#### Térbeli rakományterv · 3D")
+        st.caption("Egérrel forgatható, görgővel nagyítható. A dobozok a számított tervet és a halmozási szinteket mutatják; a nézet nem ellenőrzi a rakományrögzítést vagy a stabilitást.")
+        if st.checkbox("3D nézet megjelenítése", value=True):
+            figure = terv_3d(terv)
+            st.plotly_chart(figure, width="stretch", config={"displaylogo": False, "toImageButtonOptions": {"filename": "rakomanyterv_3d", "format": "png"}})
+            st.download_button("Interaktív 3D terv letöltése (HTML)", figure.to_html(include_plotlyjs=True).encode("utf-8"), "rakomanyterv_3d.html", "text/html")
         st.markdown("#### 7 · Rakodási terv (felülnézet, méretarányos)")
         st.caption(
             f"Módszer: {p.modszer} · futásidő {szam(p.futasido_s, 2)} s · alsó korlát {szam(p.also_korlat_cm, 0)} cm. "
             "x: távolság a homlokfaltól, y: a bal oldalfaltól. Zöld szaggatott keret: felhasznált rakodósáv; "
-            "narancs sraffozás: szabad terület a sávon belül; „×2”: egymásra helyezett egységek."
+            "narancs sraffozás: szabad terület a sávon belül; „×2”: egymásra helyezett egységek; ↻: elforgatva."
         )
         st.markdown(f'<div class="abra-keret">{rakodasi_svg(p, pk, terv.halmok, azonosito="teljes")}</div>',
                     unsafe_allow_html=True)
-        st.markdown(f'<div class="abra-keret">{rakodasi_svg(p, pk, terv.halmok, csak_sav=True, azonosito="sav")}</div>',
-                    unsafe_allow_html=True)
+        zoom = st.slider("Ábra nagyítása (%)", 100, 400, 100, 25)
+        svg = rakodasi_svg(p, pk, terv.halmok, csak_sav=True, azonosito="sav")
+        st.markdown(f'<div style="overflow-x:auto"><div style="width:{zoom}%">{svg}</div></div>', unsafe_allow_html=True)
+        st.download_button("Rakodási ábra (SVG)", rakodasi_svg(p, pk, terv.halmok).encode(), "rakodasi_abra.svg", "image/svg+xml")
         st.markdown(
             '<div class="jelmagyarazat">'
             + "".join(f'<span><i style="background:{szin(c.index)}"></i>{html.escape(c.csoport.nev)}</span>'
@@ -558,7 +575,7 @@ with tab_rakomany:
             + '<span><i style="background:#FFE0B2;border:1px solid #F57C00"></i>szabad terület</span></div>',
             unsafe_allow_html=True,
         )
-        geo_hibak = ellenoriz_elhelyezest(p.elhelyezesek, max(p.hasznalt_hossz_cm, 0.0), pk.rakter_szelesseg_cm)
+        geo_hibak = ellenoriz_elhelyezest(p.elhelyezesek, pk.rakter_hossz_cm, pk.rakter_szelesseg_cm)
         uzenetek_megjelenitese(
             [Uzenet("hiba", h) for h in geo_hibak] if geo_hibak
             else [Uzenet("ok", f"Geometriai ellenőrzés: {len(p.elhelyezesek)} alapterületi hely, nincs átfedés, "
@@ -584,6 +601,12 @@ with tab_rakomany:
 # Visszaigazolás fül – tervezett / visszaigazolt / tényleges LDM
 # ---------------------------------------------------------------------------
 
+if terv:
+    terv_hash = hashlib.sha256(json.dumps([asdict(c) for c in csoportok] + [asdict(pk), asdict(cfg)], sort_keys=True).encode()).hexdigest()
+    if ss.get("terv_hash") != terv_hash:
+        for key in ("allapot", "visszaig_ldm", "visszaig_datum", "visszaig_hiv", "rakodas_kesz", "tenyleges_ldm", "elteres_indoka", "ajanlat_jovahagyva"):
+            ss.pop(key, None)
+        ss.terv_hash = terv_hash
 kovetes: LdmKovetes | None = None
 
 with tab_visszaig:
@@ -634,6 +657,19 @@ with tab_visszaig:
             tenyleges_ldm=tenyleges,
             elteres_indoka=ss.get("elteres_indoka", "") if tenyleges is not None else "",
         )
+        with st.expander("Eltérések naplója és mentése"):
+            ss.setdefault("naplo", [])
+            st.caption("A munkamenet naplója letölthető és visszatölthető. Újraindítás előtt mentse JSON-ba; ez még nem központi adatbázis.")
+            if st.button("Aktuális állapot rögzítése a naplóban"):
+                ss.naplo.append(uj_bejegyzes(terv_hash, fejlec.hivatkozas, kovetes))
+            st.download_button("Napló mentése (JSON)", json.dumps(ss.naplo, ensure_ascii=False, indent=2), "ldm_naplo.json", "application/json")
+            uploaded = st.file_uploader("Mentett napló visszatöltése", type=["json"])
+            if st.button("Napló beolvasása") and uploaded:
+                try:
+                    ss.naplo = beolvas_naplo(uploaded.getvalue())
+                    st.success("Napló betöltve.")
+                except ValueError as exc: st.error(str(exc))
+            if ss.naplo: st.dataframe(pd.DataFrame(ss.naplo), hide_index=True)
         ve = kovetes.visszaigazolt_elteres
         te = kovetes.tenyleges_elteres
         st.markdown(
@@ -700,6 +736,9 @@ with tab_dij:
         help="Ha az LDM-alapú díj ennél kevesebb, a minimumdíj érvényes. 0 = nincs.",
     )
 
+    dij_mod = st.selectbox("Fuvarozói díjazás", ["ldm", "kg", "ftl"], format_func=lambda x: {"ldm":"LDM-alapú", "kg":"Tömegalapú (kg)", "ftl":"Teljes kamion / fix fuvarozói ajánlat"}[x])
+    dij_per_kg = st.number_input(f"Fuvarozói díj ({egyseg}/kg)", min_value=0.0, value=0.2, key=f"kg_dij_{penznem}") if dij_mod == "kg" else 0.0
+    ftl_dij = st.number_input(f"Teljes kamion díja ({egyseg})", min_value=0.0, value=2000.0 if penznem == "EUR" else 800000.0, key=f"ftl_{penznem}") if dij_mod == "ftl" else 0.0
     l1, l2 = st.columns([2, 1])
     ldm_alap = l1.radio(
         "Díjszámítás LDM-alapja",
@@ -760,6 +799,7 @@ with tab_dij:
 
     try:
         dij = szamol_dij(DijParameterek(
+            dij_mod=dij_mod, ossz_kg=terv.ossz_suly_kg if terv else 0.0, dij_per_kg=dij_per_kg, teljes_kocsi_dij=ftl_dij,
             ldm=dij_ldm, dij_per_ldm=dij_per_ldm, penznem=penznem, minimum_dij=minimum_dij,
             utdij=utdij, uzemanyag_pct=uzemanyag_pct, varakozas_ora=varakozas_ora,
             varakozas_oradij=varakozas_oradij, egyeb_felar=egyeb_felar,
@@ -768,8 +808,12 @@ with tab_dij:
     except ValueError as exc:
         st.error(str(exc))
 
+    if not terv or not terv.berakhato or hibas_csoportok:
+        dij = None
+        st.warning("Teljes, a raktérbe férő terv és megengedett össztömeg nélkül ajánlati díj nem készül.")
     if dij:
         alap_al = "minimumdíj alkalmazva" if dij.minimum_alkalmazva else f"{szam(dij.ldm)} LDM × {penz(dij_per_ldm, penznem)}"
+        if dij_mod != "ldm": alap_al = "tömegalapú díj" if dij_mod == "kg" else "fix fuvarozói ajánlat"
         st.markdown(
             '<div class="kartya-racs">'
             + kartya("Alapfuvardíj", penz(dij.alapdij, penznem), alap_al)
@@ -799,6 +843,15 @@ with tab_dij:
         )
         bontas["Összeg"] = bontas["Összeg"].map(lambda x: penz(x, penznem))
         st.dataframe(bontas, hide_index=True, width="stretch")
+        feltetelek = st.text_area("Ajánlat szerződéses feltételei", key="ajanlat_feltetelek")
+        ajanlat_hash = hashlib.sha256(json.dumps([terv_hash, asdict(dij), asdict(kovetes), feltetelek], sort_keys=True, default=str).encode()).hexdigest()
+        if ss.get("ajanlat_hash") != ajanlat_hash:
+            ss.pop("ajanlat_jovahagyva", None)
+            ss.ajanlat_hash = ajanlat_hash
+        igazolhato = bool(kovetes and kovetes.visszaigazolt and kovetes.visszaigazolas_hivatkozas.strip() and feltetelek.strip() and all(c.halmozas.statusz != "Nem igazolt" for c in terv.csoportok))
+        jovahagyva = st.checkbox("A fuvarozói díjat és a szerződéses feltételeket ellenőriztem, az ajánlatot jóváhagyom", key="ajanlat_jovahagyva", disabled=not igazolhato)
+        if not igazolhato: st.caption("Jóváhagyáshoz visszaigazolt LDM, hivatkozás, szerződéses feltételek és ellenőrzött halmozási adatok szükségesek.")
+        st.download_button("Fuvarozónak küldhető PDF-ajánlat", ajanlat_pdf(terv, fejlec, kovetes, dij, feltetelek, jovahagyva and igazolhato), "fuvarozoi_ajanlat.pdf", "application/pdf")
 
 # ---------------------------------------------------------------------------
 # Export
@@ -1030,8 +1083,8 @@ rakomány fogadására.
 with osszegzo_hely:
     if terv:
         allapot_jel = (
-            '<span class="zold">✅ Elhelyezhető</span>' if terv.berakhato
-            else '<span class="piros">⛔ Nem helyezhető el / nem igazolható</span>'
+            '<span class="zold">✅ Geometriai terv elkészült</span>' if terv.berakhato
+            else '<span class="piros">⚠️ Nincs igazolt teljes terv</span>'
         )
         dij_csik = f"<span>💶 {penz(dij.ajanlott_ar, dij.penznem)}</span>" if dij else ""
         st.markdown(
@@ -1040,3 +1093,22 @@ with osszegzo_hely:
             f'<span class="zold">🧾 elszámolási {szam(terv.elszamolas.elszamolasi_ldm)} LDM</span>{dij_csik}{allapot_jel}</div>',
             unsafe_allow_html=True,
         )
+
+with tab_teszt:
+    st.subheader("Automatikus tesztjelentés")
+    report = Path(__file__).parent / "reports" / "comparison.csv"
+    if report.exists():
+        st.caption("Szintetikus, reprodukálható esetek. Nem fuvarozói mérések. A futásidők az adott tesztgépre vonatkoznak.")
+        frame = pd.read_csv(report)
+        st.dataframe(frame, hide_index=True)
+        st.download_button("Teljes tesztjelentés (CSV)", report.read_bytes(), "tesztjelentes.csv", "text/csv")
+    st.subheader("A 24 eredeti mintapélda")
+    frame = pd.DataFrame(PELDÁK)
+    st.dataframe(frame, hide_index=True)
+    st.caption("Az eredeti referenciaértékek változatlanok. Nem bizonyított optimumok; különösen a D/3–D/6 adatai ellentmondásosak.")
+    st.download_button("24 eredeti példa (CSV)", csv_bajtok(frame), "eredeti_24_pelda.csv", "text/csv")
+    with st.expander("Megőrzött korábbi tarifatáblák"):
+        st.caption("Történeti minták, nem aktuális piaci díjak. Nem alkalmazzuk automatikusan.")
+        for name, data in TARIFAK.items():
+            st.write(name)
+            st.dataframe(pd.DataFrame({"db":range(1,len(data["kozel"])+1), "750–1500 km":data["kozel"], "1500–3000 km":data["tavol"]}), hide_index=True)

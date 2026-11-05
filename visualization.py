@@ -78,7 +78,8 @@ def rakodasi_svg(
                 f'{_szam(s.hossz_cm)}×{_szam(s.szelesseg_cm)}</text>'
             )
     for el in pakolas.elhelyezesek:
-        res = fs * .08
+        res = min(fs * .08, min(el.hossz_cm, el.szelesseg_cm) * .06)
+        label_fs = min(fs, min(el.hossz_cm, el.szelesseg_cm) / 5)
         e.append(
             f'<rect x="{el.x_cm + res:.2f}" y="{el.y_cm + res:.2f}" width="{el.hossz_cm - 2 * res:.2f}" '
             f'height="{el.szelesseg_cm - 2 * res:.2f}" fill="{szin(el.csoport)}" fill-opacity="0.88" '
@@ -88,14 +89,14 @@ def rakodasi_svg(
         )
         cx, cy = el.x_cm + el.hossz_cm / 2, el.y_cm + el.szelesseg_cm / 2
         db = halmok.get(el.sorszam, 1)
-        felirat = f"#{el.sorszam}" + (f" ×{db}" if db > 1 else "")
+        felirat = f"#{el.sorszam}" + (f" ×{db}" if db > 1 else "") + (" ↻" if el.forgatott else "")
         e.append(
-            f'<text x="{cx:.1f}" y="{cy + fs * .35:.1f}" text-anchor="middle" font-size="{fs:.2f}" '
+            f'<text x="{cx:.1f}" y="{cy + label_fs * .35:.1f}" text-anchor="middle" font-size="{label_fs:.2f}" '
             f'font-weight="700" fill="#fff">{felirat}</text>'
         )
         if csak_sav:
             e.append(
-                f'<text x="{cx:.1f}" y="{cy + fs * 1.4:.1f}" text-anchor="middle" font-size="{fs * .7:.2f}" '
+                f'<text x="{cx:.1f}" y="{cy + label_fs * 1.4:.1f}" text-anchor="middle" font-size="{fs * .7:.2f}" '
                 f'fill="#fff">{_szam(el.hossz_cm)}×{_szam(el.szelesseg_cm)}</text>'
             )
     # méretvonal a felhasznált sávhoz

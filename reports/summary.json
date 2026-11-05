@@ -1,0 +1,20 @@
+{
+  "ChatGPT 3": {
+    "cases": 1024,
+    "valid": 812,
+    "timeouts": 0,
+    "proven": 0
+  },
+  "Claude eredeti": {
+    "cases": 1024,
+    "valid": 867,
+    "timeouts": 0,
+    "proven": 809
+  },
+  "FuvarDíj 4": {
+    "cases": 1024,
+    "valid": 867,
+    "timeouts": 0,
+    "proven": 810
+  }
+}

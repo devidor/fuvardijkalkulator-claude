@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 from typing import Optional
@@ -32,7 +33,8 @@ class LdmKovetes:
 
     @property
     def visszaigazolt(self) -> bool:
-        return self.allapot in VISSZAIGAZOLT_ALLAPOTOK and self.visszaigazolt_ldm is not None
+        return (self.allapot in VISSZAIGAZOLT_ALLAPOTOK and self.visszaigazolt_ldm is not None
+                and math.isfinite(self.visszaigazolt_ldm) and self.visszaigazolt_ldm > 0)
 
     @property
     def elszamolasi_alap(self) -> tuple[float, str]:
