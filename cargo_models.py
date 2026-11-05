@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -70,6 +71,12 @@ def egysegsuly(ossz_suly_kg: float, darab: int) -> float:
 
 def validal_csoport(cs: RakomanyCsoport) -> list[str]:
     hibak = []
+    values = [cs.hossz_cm, cs.szelesseg_cm, cs.magassag_cm, cs.darab, cs.suly_kg, cs.max_szint]
+    if cs.raterheles_kg is not None: values.append(cs.raterheles_kg)
+    if not all(math.isfinite(v) for v in values):
+        return ["Minden számadat véges legyen (NaN és végtelen nem megengedett)."]
+    if any(abs(v*10-round(v*10)) > 1e-6 for v in (cs.hossz_cm, cs.szelesseg_cm, cs.magassag_cm)):
+        hibak.append("A méreteket legfeljebb 0,1 cm pontossággal adja meg.")
     if cs.hossz_cm <= 0 or cs.szelesseg_cm <= 0 or cs.magassag_cm <= 0:
         hibak.append("A hosszúság, szélesség és magasság legyen nagyobb 0-nál.")
     if cs.darab < 1 or int(cs.darab) != cs.darab:

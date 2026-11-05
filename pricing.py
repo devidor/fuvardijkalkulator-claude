@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -18,6 +19,10 @@ class DijParameterek:
     egyeb_felar: float = 0.0
     arazas_mod: str = "haszonkulcs"  # "haszonkulcs" | "arres"
     szazalek: float = 0.0
+    dij_mod: str = "ldm"
+    ossz_kg: float = 0.0
+    dij_per_kg: float = 0.0
+    teljes_kocsi_dij: float = 0.0
 
 
 @dataclass
@@ -45,19 +50,22 @@ def szamol_dij(p: DijParameterek) -> DijEredmeny:
     - Árrés: az eladási árra vetített fedezet → ár = költség ÷ (1 − a).
     """
     for nev, ertek in (
+        ("kg", p.ossz_kg), ("díj/kg", p.dij_per_kg), ("teljes kocsi díj", p.teljes_kocsi_dij),
         ("LDM", p.ldm), ("díj/LDM", p.dij_per_ldm), ("minimum díj", p.minimum_dij),
         ("útdíj", p.utdij), ("üzemanyag-pótdíj", p.uzemanyag_pct),
         ("várakozási idő", p.varakozas_ora), ("várakozási óradíj", p.varakozas_oradij),
         ("egyéb felár", p.egyeb_felar), ("százalék", p.szazalek),
     ):
-        if ertek < 0:
+        if not math.isfinite(ertek) or ertek < 0:
             raise ValueError(f"A(z) {nev} nem lehet negatív.")
     if p.arazas_mod not in ("haszonkulcs", "arres"):
         raise ValueError("Ismeretlen árazási mód.")
     if p.arazas_mod == "arres" and p.szazalek >= 100:
         raise ValueError("Az árrés 100% alatt kell legyen (az árrés az eladási ár része).")
 
-    ldm_dij = p.ldm * p.dij_per_ldm
+    if p.dij_mod not in ("ldm", "kg", "ftl") or p.penznem not in ("EUR", "HUF"):
+        raise ValueError("Ismeretlen díjazás vagy pénznem.")
+    ldm_dij = {"ldm": p.ldm * p.dij_per_ldm, "kg": p.ossz_kg * p.dij_per_kg, "ftl": p.teljes_kocsi_dij}[p.dij_mod]
     alapdij = max(ldm_dij, p.minimum_dij)
     uzemanyag = alapdij * p.uzemanyag_pct / 100
     varakozas = p.varakozas_ora * p.varakozas_oradij

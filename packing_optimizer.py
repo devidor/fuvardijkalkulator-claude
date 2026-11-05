@@ -106,7 +106,7 @@ class PakolasEredmeny:
 
     @property
     def sav_szabad_terulet_cm2(self) -> float:
-        return self.sav_terulet_cm2 - self.fedett_terulet_cm2
+        return (_mm(self.hasznalt_hossz_cm) * _mm(self.rakter_szelesseg_cm) - sum(_mm(e.hossz_cm)*_mm(e.szelesseg_cm) for e in self.elhelyezesek)) / 100
 
     @property
     def sav_kihasznaltsag_pct(self) -> float:
@@ -124,6 +124,8 @@ class PakolasEredmeny:
 
 
 def _mm(cm: float) -> int:
+    if not math.isfinite(cm) or abs(cm * 10 - round(cm * 10)) > 1e-6:
+        raise ValueError("A méret véges szám legyen, legfeljebb 0,1 cm pontossággal.")
     return int(round(cm * 10))
 
 
@@ -265,6 +267,37 @@ def _legjobb_heurisztika(tipusok: list[_Tipus], W: int) -> list[_Teglalap]:
     return min(jeloltek, key=_hossz)
 
 
+def _sarok_nyalab(tipusok, W, incumbent, deadline):
+    """ChatGPT-változat sarokpont-keresése: csoportonkénti forgatás és időkorlát.
+
+    A résztervek sosem írják felül a teljes incumbent tervet.
+    """
+    units = sorted(_kiterjesztett(tipusok), key=lambda i: -tipusok[i].l*tipusok[i].w)
+    beam = [([], 0)]
+    upper = _hossz(incumbent)
+    for ti in units:
+        candidates, seen = [], set()
+        for placed, used in beam:
+            xs = sorted({0} | {x+dx for _,x,y,dx,dy,r in placed})
+            ys = sorted({0} | {y+dy for _,x,y,dx,dy,r in placed})
+            for dx,dy,rot in tipusok[ti].iranyok(W):
+                for x in xs:
+                    if time.perf_counter() >= deadline: return incumbent
+                    if x+dx >= upper: continue
+                    for y in ys:
+                        if y+dy>W: continue
+                        if any(x<a+c and a<x+dx and y<b+d and b<y+dy for _,a,b,c,d,_ in placed): continue
+                        plan = placed+[(ti,x,y,dx,dy,rot)]
+                        signature = tuple(sorted((a,b,c,d) for _,a,b,c,d,_ in plan))
+                        if signature in seen: continue
+                        seen.add(signature)
+                        candidates.append((plan,max(used,x+dx)))
+        if not candidates: return incumbent
+        candidates.sort(key=lambda z:(z[1],sum(r[1] for r in z[0])))
+        beam=candidates[:12]
+    return min(beam,key=lambda z:z[1])[0]
+
+
 # ---------------------------------------------------------------------------
 # Alsó korlát
 # ---------------------------------------------------------------------------
@@ -275,7 +308,7 @@ def _also_korlat(tipusok: list[_Tipus], W: int) -> int:
     y_opciok = [tuple({dy for _, dy, _ in tipusok[i].iranyok(W)}) for i in egysegek]
     w_eff = max(_mintaosszegek(y_opciok, W))
     terulet = sum(tipusok[i].l * tipusok[i].w for i in egysegek)
-    korlat = math.ceil(terulet / w_eff)
+    korlat = (terulet + w_eff - 1) // w_eff
     # Minden egységnek el kell férnie hosszában.
     min_dx = [min(dx for dx, _, _ in tipusok[i].iranyok(W)) for i in egysegek]
     korlat = max(korlat, max(min_dx))
@@ -314,11 +347,13 @@ def _pontos_kereses(
         return None
     elhelyezve: list[_Teglalap] = []
     csomopont = 0
+    if time.perf_counter() >= hatarido:
+        raise _Megszakitva
 
     def kereses(i: int, j: int, pazarlas: int, maradt: int) -> bool:
         nonlocal csomopont
         csomopont += 1
-        if csomopont > max_csomopont or (csomopont & 2047 == 0 and time.perf_counter() > hatarido):
+        if csomopont > max_csomopont or (csomopont & 127 == 0 and time.perf_counter() > hatarido):
             raise _Megszakitva
         if maradt == 0:
             return True
@@ -379,55 +414,48 @@ def szabad_teglalapok(elhelyezesek: list[Elhelyezes], hossz_cm: float, szelesseg
     L, W = _mm(hossz_cm), _mm(szelesseg_cm)
     if L <= 0 or W <= 0:
         return []
-    rects = [(_mm(e.x_cm), _mm(e.y_cm), _mm(e.x2_cm), _mm(e.y2_cm)) for e in elhelyezesek]
-    xs = sorted({0, L} | {v for r in rects for v in (r[0], r[2]) if 0 <= v <= L})
-    ys = sorted({0, W} | {v for r in rects for v in (r[1], r[3]) if 0 <= v <= W})
-
-    def szabad(i, j):
-        cx, cy = (xs[i] + xs[i + 1]) / 2, (ys[j] + ys[j + 1]) / 2
-        return not any(r[0] < cx < r[2] and r[1] < cy < r[3] for r in rects)
-
-    nyitott: dict[tuple[int, int], int] = {}  # (j0, j1) → kezdő oszlop
-    kesz: list[tuple[int, int, int, int]] = []
-    for i in range(len(xs) - 1):
-        szakaszok = []
-        j = 0
-        while j < len(ys) - 1:
-            if szabad(i, j):
-                j0 = j
-                while j < len(ys) - 1 and szabad(i, j):
-                    j += 1
-                szakaszok.append((j0, j))
-            else:
-                j += 1
-        uj = {}
-        for sz in szakaszok:
-            uj[sz] = nyitott.pop(sz, i)
-        for (j0, j1), i0 in nyitott.items():
-            kesz.append((i0, i, j0, j1))
-        nyitott = uj
-    for (j0, j1), i0 in nyitott.items():
-        kesz.append((i0, len(xs) - 1, j0, j1))
-    return sorted(
-        (SzabadTeglalap(xs[i0] / 10, ys[j0] / 10, (xs[i1] - xs[i0]) / 10, (ys[j1] - ys[j0]) / 10)
-         for i0, i1, j0, j1 in kesz),
-        key=lambda s: (s.x_cm, s.y_cm),
-    )
+    events = {}
+    for i, e in enumerate(elhelyezesek):
+        a, b = max(0, _mm(e.x_cm)), min(L, _mm(e.x2_cm))
+        if a < b:
+            events.setdefault(a, []).append((i, (_mm(e.y_cm), _mm(e.y2_cm))))
+            events.setdefault(b, []).append((i, None))
+    xs = sorted({0, L} | set(events))
+    active, opened, result = {}, {}, []
+    for a, b in zip(xs, xs[1:]):
+        for i, interval in events.get(a, []):
+            if interval is None: active.pop(i, None)
+            else: active[i] = interval
+        free, y = [], 0
+        for low, high in sorted(active.values()):
+            if low > y: free.append((y, min(low, W)))
+            y = max(y, high)
+        if y < W: free.append((y, W))
+        new = {interval: opened.pop(interval, a) for interval in free}
+        for (low, high), x in opened.items():
+            result.append(SzabadTeglalap(x/10, low/10, (a-x)/10, (high-low)/10))
+        opened = new
+    for (low, high), x in opened.items():
+        result.append(SzabadTeglalap(x/10, low/10, (L-x)/10, (high-low)/10))
+    return sorted(result, key=lambda r: (r.x_cm, r.y_cm))
 
 
 def ellenoriz_elhelyezest(elhelyezesek: list[Elhelyezes], hossz_cm: float, szelesseg_cm: float) -> list[str]:
     """Független ellenőrzés: határon belül vannak-e, és nincs-e átfedés. Üres lista = rendben."""
     hibak = []
-    L, W = _mm(hossz_cm), _mm(szelesseg_cm)
-    r = [(e.sorszam, _mm(e.x_cm), _mm(e.y_cm), _mm(e.x2_cm), _mm(e.y2_cm)) for e in elhelyezesek]
-    for s, x1, y1, x2, y2 in r:
-        if x1 < 0 or y1 < 0 or x2 > L or y2 > W:
-            hibak.append(f"A(z) {s}. egység kilóg a {hossz_cm:g} × {szelesseg_cm:g} cm-es területről.")
-    for a in range(len(r)):
-        for b in range(a + 1, len(r)):
-            p, q = r[a], r[b]
-            if p[1] < q[3] and q[1] < p[3] and p[2] < q[4] and q[2] < p[4]:
-                hibak.append(f"A(z) {p[0]}. és {q[0]}. egység átfedi egymást.")
+    active = []
+    for e in sorted(elhelyezesek, key=lambda e: e.x_cm):
+        values = (e.x_cm, e.y_cm, e.hossz_cm, e.szelesseg_cm)
+        if not all(math.isfinite(v) for v in values) or min(e.hossz_cm, e.szelesseg_cm) <= 0:
+            hibak.append(f"A(z) {e.sorszam}. egység mérete érvénytelen.")
+            continue
+        if e.x_cm < 0 or e.y_cm < 0 or e.x2_cm > hossz_cm + 1e-8 or e.y2_cm > szelesseg_cm + 1e-8:
+            hibak.append(f"A(z) {e.sorszam}. egység kilóg a rakodótérből.")
+        active = [a for a in active if a.x2_cm > e.x_cm + 1e-8]
+        for a in active:
+            if a.y_cm < e.y2_cm - 1e-8 and e.y_cm < a.y2_cm - 1e-8:
+                hibak.append(f"A(z) {a.sorszam}. és {e.sorszam}. egység átfedi egymást.")
+        active.append(e)
     return hibak
 
 
@@ -449,6 +477,17 @@ def optimalizal(
     A hossz nincs felülről korlátozva: ha a rakomány nem fér el, a szükséges hossz
     meghaladja a rakodótér hosszát (``belefer`` hamis).
     """
+    if not math.isfinite(idokorlat_s) or idokorlat_s < 0:
+        raise ValueError("Az időkeret véges, nemnegatív szám legyen.")
+    if rakter_hossz_cm <= 0 or rakter_szelesseg_cm <= 0:
+        raise ValueError("A rakodótér méretei pozitívak legyenek.")
+    _mm(rakter_hossz_cm)
+    for t in tetelek:
+        if (not math.isfinite(t.darab) or int(t.darab) != t.darab or t.darab < 0
+                or t.hossz_cm <= 0 or t.szelesseg_cm <= 0):
+            raise ValueError("Érvénytelen méret vagy darabszám.")
+    if sum(t.darab for t in tetelek) > 10000:
+        raise ValueError("Legfeljebb 10 000 alapterületi hely tervezhető egy futásban.")
     kezdet = time.perf_counter()
     W = _mm(rakter_szelesseg_cm)
     tipusok = [
@@ -465,11 +504,14 @@ def optimalizal(
     legjobb = _legjobb_heurisztika(tipusok, W)
     felso = _hossz(legjobb)
     also = _also_korlat(tipusok, W)
+    if felso > also and sum(t.darab for t in tipusok) <= 16:
+        legjobb = _sarok_nyalab(tipusok, W, legjobb, min(kezdet+idokorlat_s*0.2, time.perf_counter()+0.15))
+        felso = _hossz(legjobb)
     modszer = MODSZER_KORLAT if felso <= also else MODSZER_KOZELITO
     bizonyitott = felso <= also
 
     egysegek = _kiterjesztett(tipusok)
-    if not bizonyitott and len(egysegek) <= PONTOS_MAX_EGYSEG:
+    if not bizonyitott and len(egysegek) <= PONTOS_MAX_EGYSEG and time.perf_counter() < kezdet + idokorlat_s:
         x_opciok = [tuple({dx for dx, _, _ in tipusok[i].iranyok(W)}) for i in egysegek]
         y_opciok = [tuple({dy for _, dy, _ in tipusok[i].iranyok(W)}) for i in egysegek]
         x_minta = _mintaosszegek(x_opciok, felso)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -74,7 +75,7 @@ def validal_potkocsi(pk: Potkocsi) -> list[str]:
         ("belső hossz", pk.hossz_cm), ("belső szélesség", pk.szelesseg_cm),
         ("belső magasság", pk.magassag_cm), ("hasznos teherbírás", pk.teherbiras_kg),
     ):
-        if ertek <= 0:
+        if not math.isfinite(ertek) or ertek <= 0:
             hibak.append(f"A pótkocsi {nev} értéke legyen nagyobb 0-nál.")
     for nev, szabad, nevleges in (
         ("hossz", pk.szabad_hossz_cm, pk.hossz_cm),
@@ -83,4 +84,7 @@ def validal_potkocsi(pk: Potkocsi) -> list[str]:
     ):
         if szabad is not None and not 0 < szabad <= nevleges:
             hibak.append(f"A szabad rakodási {nev} 0 és a névleges {nevleges:g} cm között legyen.")
+    for v in (pk.hossz_cm, pk.szelesseg_cm, pk.magassag_cm, pk.szabad_hossz_cm, pk.szabad_szelesseg_cm, pk.szabad_magassag_cm):
+        if v is not None and math.isfinite(v) and abs(v*10-round(v*10)) > 1e-6:
+            hibak.append("A raktérméret legfeljebb 0,1 cm pontosságú legyen.")
     return hibak

@@ -5,6 +5,7 @@ Az itt megadott alapértékek a felületen felülírhatók.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -27,8 +28,12 @@ class ElszamolasiKonfig:
     kg_per_ldm: float = ALAP_KG_PER_LDM
     kerekites: str = ALAP_KEREKITES
 
+    szabaly: str = "maximum"
+
     def __post_init__(self):
-        if self.kg_per_ldm <= 0:
+        if self.szabaly not in ("maximum", "fizikai", "tömeg"):
+            raise ValueError("Ismeretlen elszámolási szabály.")
+        if not math.isfinite(self.kg_per_ldm) or self.kg_per_ldm <= 0:
             raise ValueError("Az elszámolási index (kg/LDM) legyen nagyobb 0-nál.")
         if self.kerekites not in KEREKITESI_SZABALYOK:
             raise ValueError(f"Ismeretlen kerekítési szabály: {self.kerekites}")

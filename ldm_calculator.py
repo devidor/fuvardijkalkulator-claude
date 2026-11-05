@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 
@@ -53,13 +54,15 @@ def elszamolasi_ldm(fizikai: float, ossz_suly_kg: float, cfg: ElszamolasiKonfig)
 
     Az index díjszámítási tömegegyenérték, nem azonos a jármű terhelhetőségével.
     """
+    if not all(math.isfinite(v) and v >= 0 for v in (fizikai, ossz_suly_kg)):
+        raise ValueError("Az LDM és a tömeg véges, nemnegatív szám legyen.")
     tomeg = tomegalapu_ldm(ossz_suly_kg, cfg.kg_per_ldm)
-    nyers = max(fizikai, tomeg)
+    nyers = {"maximum": max(fizikai, tomeg), "fizikai": fizikai, "tömeg": tomeg}[cfg.szabaly]
     return ElszamolasEredmeny(
         fizikai_ldm=fizikai,
         tomegalapu_ldm=tomeg,
         elszamolasi_ldm=kerekit(nyers, cfg.kerekites),
-        meghatarozo="tömeg" if tomeg > fizikai else "fizikai",
+        meghatarozo=("tömeg" if tomeg > fizikai else "fizikai") if cfg.szabaly == "maximum" else cfg.szabaly,
         kg_per_ldm=cfg.kg_per_ldm,
         kerekites=cfg.kerekites,
     )

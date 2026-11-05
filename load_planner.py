@@ -114,8 +114,8 @@ def tervez(
             index=i,
             csoport=cs,
             halmozas=halm,
-            elmeleti_ldm_nelkul=elmeleti_ldm(cs.darab, cs.hossz_cm, cs.szelesseg_cm, pk.szelesseg_cm),
-            elmeleti_ldm=elmeleti_ldm(halm.helyek, cs.hossz_cm, cs.szelesseg_cm, pk.szelesseg_cm),
+            elmeleti_ldm_nelkul=elmeleti_ldm(cs.darab, cs.hossz_cm, cs.szelesseg_cm, pk.rakter_szelesseg_cm),
+            elmeleti_ldm=elmeleti_ldm(halm.helyek, cs.hossz_cm, cs.szelesseg_cm, pk.rakter_szelesseg_cm),
             berakhato=berakhato,
             uzenetek=uzenetek,
         ))
@@ -146,7 +146,10 @@ def tervez(
         uzenetek.append(Uzenet(
             "hiba",
             f"A rakodási terv {pakolas.hasznalt_hossz_cm:g} cm hosszt igényel, a rakodótér csak "
-            f"{pk.rakter_hossz_cm:g} cm – a rakomány nem fér el.",
+            f"{pk.rakter_hossz_cm:g} cm. " + (
+                "Az igazolt alsó korlát is meghaladja a rakteret: nem fér el."
+                if pakolas.also_korlat_cm > pk.rakter_hossz_cm else
+                "A keresés nem talált a raktérbe férő tervet; a lehetetlenség nem bizonyított."),
         ))
     if not pakolas.bizonyitott:
         uzenetek.append(Uzenet(
@@ -175,7 +178,7 @@ def tervez(
         "feltételezés, hogy ez a terület akadálymentesen használható.",
         "Az egységek tengelyekkel párhuzamosan, legfeljebb 90°-kal elforgatva, átfedés nélkül állnak; "
         "a koordináták a homlokfaltól (x) és a bal oldalfaltól (y) értendők.",
-        "A tengelyterhelés, a rakományrögzítés és a rakodási sorrend nincs modellezve.",
+        "A tengelyterhelés, a súlyeloszlás, az ajtóméret, a rakományrögzítés és a rakodási sorrend nincs modellezve. A geometriai terv nem rakodásbiztonsági jóváhagyás.",
         "A szabad területek nem feltétlenül alkalmasak más rakomány fogadására (alak, hozzáférhetőség).",
         "Egyetlen megbízó rakománya; más megbízók árujának együttes elhelyezése nincs vizsgálva.",
         f"Elszámolási index: 1 LDM = {cfg.kg_per_ldm:g} kg (díjszámítási tömegegyenérték, nem a jármű "
