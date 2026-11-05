@@ -16,6 +16,7 @@ from tracking_history import uj_bejegyzes, beolvas_naplo
 from legacy_examples import PELDÁK
 from legacy_tariffs import TARIFAK
 
+from visualization_3d import terv_3d
 import pandas as pd
 import streamlit as st
 
@@ -549,6 +550,12 @@ with tab_rakomany:
     # Rakodási terv – teljes szélességben
     if terv and terv.pakolas.elhelyezesek:
         p = terv.pakolas
+        st.markdown("#### Térbeli rakományterv · 3D")
+        st.caption("Egérrel forgatható, görgővel nagyítható. A dobozok a számított tervet és a halmozási szinteket mutatják; a nézet nem ellenőrzi a rakományrögzítést vagy a stabilitást.")
+        if st.checkbox("3D nézet megjelenítése", value=True):
+            figure = terv_3d(terv)
+            st.plotly_chart(figure, width="stretch", config={"displaylogo": False, "toImageButtonOptions": {"filename": "rakomanyterv_3d", "format": "png"}})
+            st.download_button("Interaktív 3D terv letöltése (HTML)", figure.to_html(include_plotlyjs=True).encode("utf-8"), "rakomanyterv_3d.html", "text/html")
         st.markdown("#### 7 · Rakodási terv (felülnézet, méretarányos)")
         st.caption(
             f"Módszer: {p.modszer} · futásidő {szam(p.futasido_s, 2)} s · alsó korlát {szam(p.also_korlat_cm, 0)} cm. "
