@@ -22,6 +22,7 @@ from trailer_config import (
     ALAP_TEHERBIRAS_KG, ALAP_TIPUS, EGYEDI_TIPUS, POTKOCSI_TIPUSOK, Potkocsi, validal_potkocsi,
 )
 from visualization import rakodasi_svg, szin
+from visualization_3d import rakodasi_3d_abra
 
 st.set_page_config(
     page_title="Fuvar- és rakománykalkulátor",
@@ -390,16 +391,18 @@ def csoport_urlap(gid: int, sorszam: int) -> tuple[RakomanyCsoport | None, st.de
             )
             szabvany = RAKLAP_TIPUSOK.get(ss[k("tipus", gid)])
 
-        m1, m2, m3 = st.columns(3)
+        # Sorrend: darabszám, hosszúság, szélesség, magasság, tömeg, halmozhatóság.
+        m0, m1 = st.columns(2)
+        m2, m3 = st.columns(2)
+        m0.number_input("Darabszám", min_value=1, max_value=10000, step=1, key=k("darab", gid))
         m1.number_input("Hosszúság (cm)", min_value=1.0, max_value=2000.0, step=1.0, format="%.0f", key=k("hossz", gid))
         m2.number_input("Szélesség (cm)", min_value=1.0, max_value=500.0, step=1.0, format="%.0f", key=k("szel", gid))
         m3.number_input("Magasság (cm)", min_value=1.0, max_value=500.0, step=1.0, format="%.0f", key=k("mag", gid),
                         help="Egy rakományegység teljes magassága (raklappal együtt).")
 
-        d1, d2 = st.columns(2)
-        d1.number_input("Darabszám", min_value=1, max_value=10000, step=1, key=k("darab", gid))
-        d2.radio("Tömeg megadása", [SULY_EGYSEG, SULY_OSSZES], key=k("suly_mod", gid), horizontal=True)
         darab = int(ss[k("darab", gid)])
+        d1, d2 = st.columns(2)
+        d1.radio("Tömeg megadása", [SULY_EGYSEG, SULY_OSSZES], key=k("suly_mod", gid), horizontal=True)
         if ss[k("suly_mod", gid)] == SULY_EGYSEG:
             d2.number_input("Egy egység tömege (kg)", min_value=0.1, max_value=50000.0, step=10.0, format="%.1f",
                             key=k("suly", gid))
@@ -558,6 +561,13 @@ with tab_rakomany:
             + '<span><i style="background:#FFE0B2;border:1px solid #F57C00"></i>szabad terület</span></div>',
             unsafe_allow_html=True,
         )
+        st.markdown("#### Rakodási terv három dimenzióban")
+        nezet_3d = st.radio("3D nézet", ["Teljes rakodótér", "Csak a felhasznált sáv"], horizontal=True,
+                            key="nezet_3d", label_visibility="collapsed")
+        st.caption("Forgatás: húzás egérrel/ujjal · nagyítás: görgő/csippentés · egy egységre mutatva "
+                   "látszik a helye és a szintje. Az egységek közötti 1 cm-es rés csak a jobb láthatóságot szolgálja.")
+        st.plotly_chart(rakodasi_3d_abra(terv, csak_sav=nezet_3d == "Csak a felhasznált sáv"),
+                        width="stretch", theme=None, key="abra_3d")
         geo_hibak = ellenoriz_elhelyezest(p.elhelyezesek, max(p.hasznalt_hossz_cm, 0.0), pk.rakter_szelesseg_cm)
         uzenetek_megjelenitese(
             [Uzenet("hiba", h) for h in geo_hibak] if geo_hibak

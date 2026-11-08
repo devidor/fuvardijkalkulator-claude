@@ -32,6 +32,16 @@ def test_alapallapot_hiba_nelkul_fut():
     assert "<svg" in s
 
 
+def test_bemeneti_mezok_sorrendje_es_3d_abra():
+    at = futtat()
+    cimkek = [w.label for w in at.number_input if w.key and w.key.endswith("_1")]
+    assert cimkek[:5] == ["Darabszám", "Hosszúság (cm)", "Szélesség (cm)", "Magasság (cm)", "Egy egység tömege (kg)"]
+    sorrend = [w.label for w in at.main if getattr(w, "key", None) and str(w.key).endswith("_1")
+               and getattr(w, "label", None) in ("Magasság (cm)", "Egy egység tömege (kg)", "Halmozhatóság")]
+    assert sorrend == ["Magasság (cm)", "Egy egység tömege (kg)", "Halmozhatóság"]
+    assert at.get("plotly_chart")
+
+
 def test_a_pelda_megjelenitese():
     s = html_szoveg(futtat("A példa – 4 raklap 140 × 100 cm, 2000 kg"))
     assert "2,29" in s  # elméleti LDM

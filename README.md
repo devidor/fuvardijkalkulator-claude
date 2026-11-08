@@ -18,6 +18,7 @@ rakodási terv és fuvardíj-becslés.
   MAX(fizikai, tömegalapú), konfigurálható kerekítéssel.
 - **Halmozás**: halommagasság, belmagasság, ráterhelés, túlnyúlás, felváltva forgatott halmozás;
   hiányzó adatnál „Nem igazolt” állapot.
+- **3D rakodási nézet** (forgatható, nagyítható; halmok szintenként).
 - **Felülnézeti rakodási ábra** (méretarányos): lefedett terület, szabad területek, felhasznált sáv,
   kihasználtság, elhelyezési koordináták, automatikus átfedés-ellenőrzés.
 - **Tervezett / visszaigazolt / tényleges LDM** külön kezelve, eltérésekkel és indokkal.
@@ -74,6 +75,7 @@ A tároló közvetlenül telepíthető: **Create app** → tároló, `main` ág,
 | `load_planner.py` | A rakodási terv összeállítása |
 | `ldm_tracking.py` | Tervezett / visszaigazolt / tényleges LDM |
 | `visualization.py` | Felülnézeti SVG-ábra |
+| `visualization_3d.py` | 3D rakodási nézet (Plotly) |
 | `load_plan_export.py` | Fuvarozói rakodási terv (HTML) |
 | `pricing.py` | Fuvardíj-becslés |
 | `tests/` | Automatizált tesztek |
