@@ -552,8 +552,6 @@ with tab_rakomany:
         )
         st.markdown(f'<div class="abra-keret">{rakodasi_svg(p, pk, terv.halmok, azonosito="teljes")}</div>',
                     unsafe_allow_html=True)
-        st.markdown(f'<div class="abra-keret">{rakodasi_svg(p, pk, terv.halmok, csak_sav=True, azonosito="sav")}</div>',
-                    unsafe_allow_html=True)
         st.markdown(
             '<div class="jelmagyarazat">'
             + "".join(f'<span><i style="background:{szin(c.index)}"></i>{html.escape(c.csoport.nev)}</span>'
