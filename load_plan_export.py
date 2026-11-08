@@ -133,7 +133,6 @@ li {{margin: 3px 0; font-size: 13px;}} li.hiba {{color: #B71C1C;}} li.figyelmezt
 <h2>Javasolt elrendezés (felülnézet)</h2>
 <div class="al">x: távolság a homlokfaltól, y: távolság a bal oldalfaltól. Zöld szaggatott keret: felhasznált rakodósáv; narancs sraffozás: szabad terület a sávon belül; „×2”: egymásra helyezett egységek.</div>
 <div class="abra">{rakodasi_svg(p, pk, terv.halmok, csak_sav=False, azonosito="teljes")}</div>
-<div class="abra">{rakodasi_svg(p, pk, terv.halmok, csak_sav=True, azonosito="sav")}</div>
 <h2>Elhelyezési koordináták</h2>
 {_tabla(["Hely", "Csoport", "x (cm)", "y (cm)", "Hossz x (cm)", "Szélesség y (cm)", "Forgatva", "Egymásra (db)"], koord, {0, 2, 3, 4, 5, 7})}
 <h2>Szabad területek a felhasznált sávon belül</h2>
