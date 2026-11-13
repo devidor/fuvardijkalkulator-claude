@@ -11,8 +11,11 @@ from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 
+import email_extraction as ee
 from billing_config import ALAP_KEREKITES, ALAP_KG_PER_LDM, KEREKITESI_SZABALYOK, ElszamolasiKonfig
 from cargo_models import RAKLAP_TIPUSOK, RakomanyCsoport, Uzenet, validal_csoport
+from email_samples import MINTAK
+from email_schema import Bizonyossag, FuvarIgenyAdat, hianyzo_es_bizonytalan_mezok
 from ldm_tracking import ALLAPOTOK, VISSZAIGAZOLT_ALLAPOTOK, LdmKovetes, elemzes
 from load_plan_export import TervFejlec, elhelyezes_sorok, rakodasi_terv_html
 from load_planner import RakodasiTerv, tervez
@@ -49,6 +52,16 @@ SZINT_OPCIOK = {
     "4 szintig halmozható": 4,
     "Egyedi szintszám": None,
 }
+SZINT_FORDITOTT = {szint: cimke for cimke, szint in SZINT_OPCIOK.items() if szint is not None}
+
+AI_UTMUTATO = (
+    "Illessze be a fuvarigényt tartalmazó e-mail szövegét. A rendszer a Rakomány fülön elvárt "
+    "sorrendben (darabszám, hosszúság, szélesség, magasság, tömeg, halmozhatóság) próbálja "
+    "kinyerni az adatokat. Amit a levél nem mond ki egyértelműen, azt a program **nem találja ki** "
+    "– hiányzóként vagy bizonytalanként jelzi, és Önre bízza a kiegészítést."
+)
+AI_TETEL_MEZOK = (("darab", "Darabszám"), ("hossz_cm", "Hosszúság (cm)"), ("szelesseg_cm", "Szélesség (cm)"),
+                  ("magassag_cm", "Magasság (cm)"), ("suly_kg", "Tömeg/db (kg)"))
 
 LDM_ALAP_ELSZAMOLASI = "Elszámolási LDM (tervezett)"
 LDM_ALAP_VISSZAIGAZOLT = "Fuvarozó által visszaigazolt LDM"
@@ -145,6 +158,10 @@ st.markdown(
 .panel-cim {font-size: 1.15rem; font-weight: 700; color: #0B2545; margin: .2rem 0 .3rem;}
 .jelveny {display: inline-block; border-radius: 999px; padding: .15rem .65rem; font-size: .8rem; font-weight: 700;}
 .jelveny.zold {background: #E8F5E9; color: #1B5E20;} .jelveny.narancs {background: #FFF3E0; color: #7A3E00;}
+.jelveny.piros {background: #FDECEA; color: #7F1D1D;}
+.ai-mezo {display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .4rem; margin: .15rem 0 .1rem; font-size: .82rem; color: #13315C; font-weight: 600; line-height: 1.3;}
+.ai-mezo .jelveny {font-size: .68rem; padding: .1rem .5rem; white-space: nowrap;}
+.ai-tetel-cim {font-weight: 700; color: #0B2545; margin: .3rem 0 .1rem;}
 div[data-testid="stTabs"] button p {font-size: 1rem; font-weight: 600;}
 @media (max-width: 640px) {
   .app-fejlec h1 {font-size: 1.3rem;}
@@ -235,6 +252,95 @@ def pelda_betoltese() -> None:
         csoport_torol(gid)
     for adatok in PELDAK[nev]:
         csoport_hozzaad(**adatok)
+
+
+def bizonyossag_jelveny(bizonyossag: Bizonyossag) -> str:
+    stilus = {"biztos": "zold", "bizonytalan": "narancs", "hianyzik": "piros"}[bizonyossag.value]
+    cimke = {"biztos": "felismert", "bizonytalan": "bizonytalan", "hianyzik": "hiányzik"}[bizonyossag.value]
+    return f'<span class="jelveny {stilus}">{cimke}</span>'
+
+
+def ai_t_kulcs(idx: int, mezo: str) -> str:
+    return f"ai_t_{idx}_{mezo}"
+
+
+def ai_eredmeny_betoltese(eredmeny: "ee.KinyerasEredmeny") -> None:
+    """Az AI (vagy minta) kinyerési eredményét szerkeszthető mezőkbe tölti.
+
+    A korábbi tételsorok mezőit törli, hogy ne maradjon vissza érvénytelen adat egy
+    rövidebb új eredmény esetén.
+    """
+    adat = eredmeny.adat
+    for mezo in ("f_hely", "f_cim", "f_datum", "l_hely", "l_cim", "l_datum", "arunev", "jarmu"):
+        st.session_state.pop(f"ai_{mezo}", None)
+    st.session_state["ai_f_hely"] = adat.felrakas_hely.ertek or ""
+    st.session_state["ai_f_cim"] = adat.felrakas_cim.ertek or ""
+    st.session_state["ai_f_datum"] = adat.felrakas_datum.ertek or ""
+    st.session_state["ai_l_hely"] = adat.lerakas_hely.ertek or ""
+    st.session_state["ai_l_cim"] = adat.lerakas_cim.ertek or ""
+    st.session_state["ai_l_datum"] = adat.lerakas_datum.ertek or ""
+    st.session_state["ai_arunev"] = adat.rakomany_megnevezese.ertek or ""
+    st.session_state["ai_jarmu"] = adat.jarmuigeny.ertek or ""
+
+    regi_db = len(st.session_state.get("ai_tetel_indexek", []))
+    for i in range(regi_db):
+        for mezo, _ in AI_TETEL_MEZOK:
+            st.session_state.pop(ai_t_kulcs(i, mezo), None)
+        st.session_state.pop(ai_t_kulcs(i, "nev"), None)
+        st.session_state.pop(ai_t_kulcs(i, "halmozhato"), None)
+        st.session_state.pop(ai_t_kulcs(i, "szint"), None)
+
+    indexek = list(range(len(adat.tetelek)))
+    for i, t in enumerate(indexek):
+        tetel = adat.tetelek[i]
+        st.session_state[ai_t_kulcs(i, "nev")] = tetel.nev.ertek or f"AI tétel {i + 1}"
+        st.session_state[ai_t_kulcs(i, "darab")] = int(tetel.darab.ertek) if tetel.darab.ismert else 1
+        st.session_state[ai_t_kulcs(i, "hossz_cm")] = float(tetel.hossz_cm.ertek) if tetel.hossz_cm.ismert else 1.0
+        st.session_state[ai_t_kulcs(i, "szelesseg_cm")] = float(tetel.szelesseg_cm.ertek) if tetel.szelesseg_cm.ismert else 1.0
+        st.session_state[ai_t_kulcs(i, "magassag_cm")] = float(tetel.magassag_cm.ertek) if tetel.magassag_cm.ismert else 1.0
+        st.session_state[ai_t_kulcs(i, "suly_kg")] = float(tetel.suly_kg.ertek) if tetel.suly_kg.ismert else 1.0
+        if tetel.halmozasi_szint.ismert:
+            szint = max(1, min(20, int(tetel.halmozasi_szint.ertek)))
+        elif tetel.halmozhato.ertek is False:
+            szint = 1
+        else:
+            szint = 1  # halmozhatóság nem ismert → óvatos alapértelmezés, a figyelmeztetés jelzi
+        st.session_state[ai_t_kulcs(i, "halmozhato")] = szint > 1
+        st.session_state[ai_t_kulcs(i, "szint")] = szint
+
+    st.session_state["ai_tetel_indexek"] = indexek
+    st.session_state["ai_eredmeny"] = eredmeny
+    st.session_state.pop("ai_atadott_db", None)
+
+
+def atad_a_kalkulatornak() -> None:
+    """A szerkesztett AI-adatlap tételeit átadja a Rakomány fülnek, mint új csoportokat."""
+    indexek = st.session_state.get("ai_tetel_indexek", [])
+    hozzaadott, kihagyott = 0, 0
+    for i in indexek:
+        darab = st.session_state.get(ai_t_kulcs(i, "darab"), 0)
+        hossz = st.session_state.get(ai_t_kulcs(i, "hossz_cm"), 0)
+        szel = st.session_state.get(ai_t_kulcs(i, "szelesseg_cm"), 0)
+        mag = st.session_state.get(ai_t_kulcs(i, "magassag_cm"), 0)
+        suly = st.session_state.get(ai_t_kulcs(i, "suly_kg"), 0)
+        if not all(ertek and ertek > 0 for ertek in (darab, hossz, szel, mag, suly)):
+            kihagyott += 1
+            continue
+        szint = int(st.session_state.get(ai_t_kulcs(i, "szint"), 1))
+        szint_cimke = SZINT_FORDITOTT.get(szint, "Egyedi szintszám")
+        csoport_hozzaad(
+            nev=str(st.session_state.get(ai_t_kulcs(i, "nev")) or f"AI tétel {i + 1}"),
+            mod=MOD_EGYEDI, hossz=float(hossz), szel=float(szel), mag=float(mag), darab=int(darab),
+            suly_mod=SULY_EGYSEG, suly=float(suly), szint_opcio=szint_cimke, szint_egyedi=szint,
+        )
+        hozzaadott += 1
+    st.session_state["ai_atadott_db"] = hozzaadott
+    st.session_state["ai_atadott_kihagyva"] = kihagyott
+
+    felrakas = (st.session_state.get("ai_f_hely") or "").strip()
+    lerakas = (st.session_state.get("ai_l_hely") or "").strip()
+    if (felrakas or lerakas) and not st.session_state.get("viszonylat"):
+        st.session_state["viszonylat"] = f"{felrakas or '?'} – {lerakas or '?'}"
 
 
 def potkocsi_tipus_valtozott() -> None:
@@ -363,9 +469,129 @@ if pk_hibak:
 cfg = ElszamolasiKonfig(kg_per_ldm=float(ss.kg_per_ldm), kerekites=ss.kerekites)
 
 osszegzo_hely = st.container()
-tab_rakomany, tab_visszaig, tab_dij, tab_eredmeny, tab_sugo = st.tabs(
-    ["📦 Rakomány", "✅ Visszaigazolás", "💶 Fuvardíj", "📊 Összesítő", "ℹ️ Útmutató"]
+tab_ai, tab_rakomany, tab_visszaig, tab_dij, tab_eredmeny, tab_sugo = st.tabs(
+    ["🤖 AI e-mail-feldolgozás", "📦 Rakomány", "✅ Visszaigazolás", "💶 Fuvardíj", "📊 Összesítő", "ℹ️ Útmutató"]
 )
+
+# ---------------------------------------------------------------------------
+# AI e-mail-feldolgozás fül
+# ---------------------------------------------------------------------------
+
+with tab_ai:
+    st.markdown(AI_UTMUTATO)
+
+    kulcs_van = bool(ee.api_kulcs_elerheto())
+    if not kulcs_van:
+        st.markdown(uzenet_html(Uzenet(
+            "info",
+            "Nincs beállítva AI-kulcs (ANTHROPIC_API_KEY környezeti változó vagy Streamlit Secrets) – "
+            "teszt üzemmódban csak a lenti mintalevelekkel próbálható ki a funkció.",
+        )), unsafe_allow_html=True)
+
+    m1, m2 = st.columns([3, 1], vertical_alignment="bottom")
+    minta_cim = m1.selectbox("Minta levél betöltése", [""] + list(MINTAK), key="ai_minta_valasztott")
+    if m2.button("Minta beillesztése", width="stretch") and minta_cim:
+        st.session_state["ai_level_szoveg"] = MINTAK[minta_cim].szoveg
+
+    st.text_area(
+        "E-mail szövege", key="ai_level_szoveg", height=200,
+        placeholder="Illessze be ide a fuvarigényt tartalmazó e-mail szövegét…",
+    )
+
+    if st.button("🔍 Fuvaradatok kinyerése", type="primary"):
+        szoveg = st.session_state.get("ai_level_szoveg", "")
+        try:
+            with st.spinner("Fuvaradatok kinyerése folyamatban…"):
+                eredmeny = ee.fuvarigeny_kinyerese(szoveg)
+            ai_eredmeny_betoltese(eredmeny)
+        except ee.KinyerasiHiba as exc:
+            st.session_state.pop("ai_eredmeny", None)
+            st.error(str(exc))
+
+    ai_eredmeny: ee.KinyerasEredmeny | None = st.session_state.get("ai_eredmeny")
+    if ai_eredmeny:
+        if ai_eredmeny.mod == "minta":
+            st.markdown(uzenet_html(Uzenet(
+                "info", f"Teszt üzemmód – rögzített mintaeredmény ({ai_eredmeny.forras}), nem élő AI-hívás.",
+            )), unsafe_allow_html=True)
+        else:
+            st.markdown(uzenet_html(Uzenet("ok", f"AI-kinyerés kész ({ai_eredmeny.forras} modell).")),
+                        unsafe_allow_html=True)
+
+        adat = ai_eredmeny.adat
+        st.markdown("##### Fuvarozási adatok")
+        st.caption("Minden mező szerkeszthető; a jelvény az AI-kinyerés eredeti megbízhatóságát mutatja.")
+        r1, r2 = st.columns(2)
+        with r1:
+            st.markdown(f'<div class="ai-mezo">Felrakási hely {bizonyossag_jelveny(adat.felrakas_hely.bizonyossag)}</div>', unsafe_allow_html=True)
+            st.text_input("Felrakási hely", key="ai_f_hely", label_visibility="collapsed")
+            st.markdown(f'<div class="ai-mezo">Felrakási cím {bizonyossag_jelveny(adat.felrakas_cim.bizonyossag)}</div>', unsafe_allow_html=True)
+            st.text_input("Felrakási cím", key="ai_f_cim", label_visibility="collapsed")
+            st.markdown(f'<div class="ai-mezo">Felrakási időpont {bizonyossag_jelveny(adat.felrakas_datum.bizonyossag)}</div>', unsafe_allow_html=True)
+            st.text_input("Felrakási időpont", key="ai_f_datum", label_visibility="collapsed")
+        with r2:
+            st.markdown(f'<div class="ai-mezo">Lerakási hely {bizonyossag_jelveny(adat.lerakas_hely.bizonyossag)}</div>', unsafe_allow_html=True)
+            st.text_input("Lerakási hely", key="ai_l_hely", label_visibility="collapsed")
+            st.markdown(f'<div class="ai-mezo">Lerakási cím {bizonyossag_jelveny(adat.lerakas_cim.bizonyossag)}</div>', unsafe_allow_html=True)
+            st.text_input("Lerakási cím", key="ai_l_cim", label_visibility="collapsed")
+            st.markdown(f'<div class="ai-mezo">Lerakási időpont {bizonyossag_jelveny(adat.lerakas_datum.bizonyossag)}</div>', unsafe_allow_html=True)
+            st.text_input("Lerakási időpont", key="ai_l_datum", label_visibility="collapsed")
+        r3, r4 = st.columns(2)
+        with r3:
+            st.markdown(f'<div class="ai-mezo">Rakomány megnevezése {bizonyossag_jelveny(adat.rakomany_megnevezese.bizonyossag)}</div>', unsafe_allow_html=True)
+            st.text_input("Rakomány megnevezése", key="ai_arunev", label_visibility="collapsed")
+        with r4:
+            st.markdown(f'<div class="ai-mezo">Járműigény {bizonyossag_jelveny(adat.jarmuigeny.bizonyossag)}</div>', unsafe_allow_html=True)
+            st.text_input("Járműigény", key="ai_jarmu", label_visibility="collapsed")
+
+        st.markdown("##### Rakománytételek")
+        st.caption("Sorrend: darabszám, hosszúság, szélesség, magasság, tömeg, halmozhatóság – mint a Rakomány fülön.")
+        if not adat.tetelek:
+            st.markdown(uzenet_html(Uzenet("hiba", "A levélből nem sikerült egyetlen rakománytételt sem kinyerni.")),
+                        unsafe_allow_html=True)
+        for i in st.session_state.get("ai_tetel_indexek", []):
+            tetel = adat.tetelek[i]
+            with st.container(border=True):
+                st.markdown(f'<div class="ai-tetel-cim">{i + 1}. tétel</div>', unsafe_allow_html=True)
+                st.text_input("Megnevezés", key=ai_t_kulcs(i, "nev"))
+                c = st.columns(3) + st.columns(2)
+                for (mezo, cimke), oszlop in zip(AI_TETEL_MEZOK, c):
+                    with oszlop:
+                        st.markdown(f'<div class="ai-mezo">{cimke} {bizonyossag_jelveny(getattr(tetel, mezo).bizonyossag)}</div>',
+                                    unsafe_allow_html=True)
+                        if mezo == "darab":
+                            st.number_input(cimke, key=ai_t_kulcs(i, mezo), min_value=1, step=1, label_visibility="collapsed")
+                        else:
+                            st.number_input(cimke, key=ai_t_kulcs(i, mezo), min_value=0.1, step=1.0, format="%.1f",
+                                            label_visibility="collapsed")
+                h1, h2 = st.columns([1, 2])
+                h1.markdown(f'<div class="ai-mezo">Halmozhatóság {bizonyossag_jelveny(tetel.halmozhato.bizonyossag)}</div>', unsafe_allow_html=True)
+                h1.checkbox("Halmozható", key=ai_t_kulcs(i, "halmozhato"), label_visibility="collapsed")
+                if st.session_state.get(ai_t_kulcs(i, "halmozhato")):
+                    h2.number_input("Max. egymásra rakható egység", key=ai_t_kulcs(i, "szint"), min_value=2, max_value=20, step=1)
+                else:
+                    st.session_state[ai_t_kulcs(i, "szint")] = 1
+
+        hianyzik, bizonytalan = hianyzo_es_bizonytalan_mezok(adat)
+        uzenetek = [Uzenet("hiba", f"Hiányzó adat: {h}") for h in hianyzik]
+        uzenetek += [Uzenet("figyelmeztetes", f"Bizonytalan adat: {b}") for b in bizonytalan]
+        uzenetek += [Uzenet("info", m) for m in adat.altalanos_megjegyzesek]
+        uzenetek_megjelenitese(uzenetek)
+
+        st.button("➕ Átadás a FuvarDíj kalkulátornak", on_click=atad_a_kalkulatornak, type="primary", width="stretch")
+        if "ai_atadott_db" in st.session_state:
+            db, kihagyva = st.session_state["ai_atadott_db"], st.session_state.get("ai_atadott_kihagyva", 0)
+            if db:
+                uzenet = (f"{db} rakománytétel átadva a 📦 Rakomány fülnek. Nyissa meg azt a fület az "
+                          "ellenőrzéshez és a forgathatóság / ráterhelhetőség pontosításához.")
+                if kihagyva:
+                    uzenet += f" {kihagyva} tétel kimaradt hiányzó alapadat (darab, méret vagy tömeg) miatt."
+                st.markdown(uzenet_html(Uzenet("ok", uzenet)), unsafe_allow_html=True)
+            else:
+                st.markdown(uzenet_html(Uzenet(
+                    "hiba", "Egyetlen tétel sem adható át – minden tételből hiányzik legalább a darabszám, "
+                    "egy méret vagy a tömeg.",
+                )), unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 # Rakomány fül – bemenet
