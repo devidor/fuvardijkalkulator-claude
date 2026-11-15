@@ -104,9 +104,13 @@ class FuvarIgenyAdat:
     """Egy e-mailből kinyert teljes fuvarigény."""
 
     felrakas_hely: KinyertMezo = field(default_factory=KinyertMezo.ures)
+    felrakas_orszagkod: KinyertMezo = field(default_factory=KinyertMezo.ures)
+    felrakas_irsz: KinyertMezo = field(default_factory=KinyertMezo.ures)
     felrakas_cim: KinyertMezo = field(default_factory=KinyertMezo.ures)
     felrakas_datum: KinyertMezo = field(default_factory=KinyertMezo.ures)
     lerakas_hely: KinyertMezo = field(default_factory=KinyertMezo.ures)
+    lerakas_orszagkod: KinyertMezo = field(default_factory=KinyertMezo.ures)
+    lerakas_irsz: KinyertMezo = field(default_factory=KinyertMezo.ures)
     lerakas_cim: KinyertMezo = field(default_factory=KinyertMezo.ures)
     lerakas_datum: KinyertMezo = field(default_factory=KinyertMezo.ures)
     rakomany_megnevezese: KinyertMezo = field(default_factory=KinyertMezo.ures)
@@ -118,9 +122,13 @@ class FuvarIgenyAdat:
     def from_dict(cls, d: dict) -> "FuvarIgenyAdat":
         return cls(
             felrakas_hely=KinyertMezo.from_dict(d.get("felrakas_hely")),
+            felrakas_orszagkod=KinyertMezo.from_dict(d.get("felrakas_orszagkod")),
+            felrakas_irsz=KinyertMezo.from_dict(d.get("felrakas_irsz")),
             felrakas_cim=KinyertMezo.from_dict(d.get("felrakas_cim")),
             felrakas_datum=KinyertMezo.from_dict(d.get("felrakas_datum")),
             lerakas_hely=KinyertMezo.from_dict(d.get("lerakas_hely")),
+            lerakas_orszagkod=KinyertMezo.from_dict(d.get("lerakas_orszagkod")),
+            lerakas_irsz=KinyertMezo.from_dict(d.get("lerakas_irsz")),
             lerakas_cim=KinyertMezo.from_dict(d.get("lerakas_cim")),
             lerakas_datum=KinyertMezo.from_dict(d.get("lerakas_datum")),
             rakomany_megnevezese=KinyertMezo.from_dict(d.get("rakomany_megnevezese")),
@@ -133,9 +141,13 @@ class FuvarIgenyAdat:
 # A fuvarozási (nem rakomány-) mezők felirata, a hiányzó/bizonytalan lista összeállításához.
 _FUVAR_MEZO_CIMKE = {
     "felrakas_hely": "felrakási hely",
+    "felrakas_orszagkod": "felrakási ország",
+    "felrakas_irsz": "felrakási irányítószám",
     "felrakas_cim": "felrakási cím",
     "felrakas_datum": "felrakási időpont",
     "lerakas_hely": "lerakási hely",
+    "lerakas_orszagkod": "lerakási ország",
+    "lerakas_irsz": "lerakási irányítószám",
     "lerakas_cim": "lerakási cím",
     "lerakas_datum": "lerakási időpont",
     "rakomany_megnevezese": "rakomány megnevezése",

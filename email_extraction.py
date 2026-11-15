@@ -71,9 +71,13 @@ FUVARIGENY_ESZKOZ = {
         "type": "object",
         "properties": {
             "felrakas_hely": _SZOVEG_MEZO,
+            "felrakas_orszagkod": _SZOVEG_MEZO,
+            "felrakas_irsz": _SZOVEG_MEZO,
             "felrakas_cim": _SZOVEG_MEZO,
             "felrakas_datum": _SZOVEG_MEZO,
             "lerakas_hely": _SZOVEG_MEZO,
+            "lerakas_orszagkod": _SZOVEG_MEZO,
+            "lerakas_irsz": _SZOVEG_MEZO,
             "lerakas_cim": _SZOVEG_MEZO,
             "lerakas_datum": _SZOVEG_MEZO,
             "rakomany_megnevezese": _SZOVEG_MEZO,
@@ -82,7 +86,8 @@ FUVARIGENY_ESZKOZ = {
             "altalanos_megjegyzesek": {"type": "array", "items": {"type": "string"}},
         },
         "required": [
-            "felrakas_hely", "felrakas_cim", "felrakas_datum", "lerakas_hely", "lerakas_cim",
+            "felrakas_hely", "felrakas_orszagkod", "felrakas_irsz", "felrakas_cim", "felrakas_datum",
+            "lerakas_hely", "lerakas_orszagkod", "lerakas_irsz", "lerakas_cim",
             "lerakas_datum", "rakomany_megnevezese", "jarmuigeny", "tetelek", "altalanos_megjegyzesek",
         ],
     },
@@ -111,7 +116,8 @@ adatot rögzíts. Szigorúan kövesd ezeket a szabályokat:
    "nem halmozható", "kettesével rakható"); egyébként "hianyzik". A `halmozasi_szint` a megadott \
    maximális egymásra rakható egységszám (pl. "kettesével halmozható" → 2, "nem halmozható" → 1); \
    ha nincs megadva, "hianyzik".
-8. Az `altalanos_megjegyzesek` listában sorold fel röviden, mi hiányzik vagy bizonytalan a \
+8. A `felrakas_orszagkod` / `lerakas_orszagkod` az ország kétbetűs ISO-kódja (pl. HU, AT, DE).    Ha a levél kifejezetten megadja (pl. "HU-8000", "Ausztria"), "biztos"; ha csak egy egyértelmű    városnévből következik (pl. Budapest → HU, München → DE), "bizonytalan", megjegyzés:    "a városnévből következtetve". A `felrakas_irsz` / `lerakas_irsz` csak a levélben szereplő    irányítószám lehet (pl. "8000"), soha ne keress ki vagy találj ki irányítószámot.
+9. Az `altalanos_megjegyzesek` listában sorold fel röviden, mi hiányzik vagy bizonytalan a \
    fuvarszervező szempontjából (pl. hiányzó pontos cím, dátum).
 
 Ne adj szöveges választ, kizárólag a `fuvarigeny_rogzitese` eszközt hívd meg egyszer."""

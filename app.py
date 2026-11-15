@@ -10,8 +10,12 @@ from datetime import date, datetime
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
+import distance as tav
 import email_extraction as ee
+import freight_pricing as fp
+import rate_tables as rt
 from billing_config import ALAP_KEREKITES, ALAP_KG_PER_LDM, KEREKITESI_SZABALYOK, ElszamolasiKonfig
 from cargo_models import RAKLAP_TIPUSOK, RakomanyCsoport, Uzenet, validal_csoport
 from email_samples import MINTAK
@@ -71,6 +75,17 @@ LDM_ALAP_KEZI = "Kézi megadás"
 
 ARAZAS_HASZONKULCS = "Haszonkulcs (beszerzési költségre vetítve)"
 ARAZAS_ARRES = "Árrés (eladási árra vetítve)"
+ARAZAS_FIX = "Fix összeg (kézi megadás)"
+ARAZAS_MOD = {ARAZAS_HASZONKULCS: "haszonkulcs", ARAZAS_ARRES: "arres", ARAZAS_FIX: "fix"}
+
+DIJALAP_KM = "Km-alapú (FTL / LTL díjtábla)"
+DIJALAP_LDM = "LDM-alapú (díj / LDM)"
+ORSZAG_KODOK = sorted(rt.ORSZAGOK)
+SZOLG_CIMKE = {
+    fp.SZOLG_AUTO: "Automatikus (ldm alapján)",
+    fp.SZOLG_FTL: "FTL – komplett rakomány",
+    fp.SZOLG_LTL: "LTL – részrakomány",
+}
 
 CSOPORT_ALAP = {
     "nev": "Rakomány",
@@ -271,9 +286,14 @@ def ai_eredmeny_betoltese(eredmeny: "ee.KinyerasEredmeny") -> None:
     rövidebb új eredmény esetén.
     """
     adat = eredmeny.adat
-    for mezo in ("f_hely", "f_cim", "f_datum", "l_hely", "l_cim", "l_datum", "arunev", "jarmu"):
+    for mezo in ("f_hely", "f_orszag", "f_irsz", "f_cim", "f_datum", "l_hely", "l_orszag", "l_irsz", "l_cim",
+                 "l_datum", "arunev", "jarmu"):
         st.session_state.pop(f"ai_{mezo}", None)
     st.session_state["ai_f_hely"] = adat.felrakas_hely.ertek or ""
+    st.session_state["ai_f_orszag"] = rt.normalizal_orszagkod(adat.felrakas_orszagkod.ertek) or ""
+    st.session_state["ai_f_irsz"] = str(adat.felrakas_irsz.ertek or "")
+    st.session_state["ai_l_orszag"] = rt.normalizal_orszagkod(adat.lerakas_orszagkod.ertek) or ""
+    st.session_state["ai_l_irsz"] = str(adat.lerakas_irsz.ertek or "")
     st.session_state["ai_f_cim"] = adat.felrakas_cim.ertek or ""
     st.session_state["ai_f_datum"] = adat.felrakas_datum.ertek or ""
     st.session_state["ai_l_hely"] = adat.lerakas_hely.ertek or ""
@@ -342,6 +362,20 @@ def atad_a_kalkulatornak() -> None:
     if (felrakas or lerakas) and not st.session_state.get("viszonylat"):
         st.session_state["viszonylat"] = f"{felrakas or '?'} – {lerakas or '?'}"
 
+    # Fuvardíj fül: ország, irányítószám, település → km-alapú díjszámítás.
+    atadott_viszonylat = False
+    for elotag, telepules in (("f", felrakas), ("l", lerakas)):
+        kod = rt.normalizal_orszagkod(st.session_state.get(f"ai_{elotag}_orszag"))
+        if kod:
+            st.session_state[f"fd_{elotag}_orszag"] = kod
+            atadott_viszonylat = True
+        st.session_state[f"fd_{elotag}_irsz"] = (st.session_state.get(f"ai_{elotag}_irsz") or "").strip()
+        st.session_state[f"fd_{elotag}_telepules"] = telepules
+    if atadott_viszonylat:
+        orszag_valtozott()
+        st.session_state["fd_km"] = 0.0
+    st.session_state["ai_atadott_viszonylat"] = atadott_viszonylat
+
 
 def potkocsi_tipus_valtozott() -> None:
     t = POTKOCSI_TIPUSOK.get(st.session_state.pk_tipus)
@@ -349,6 +383,27 @@ def potkocsi_tipus_valtozott() -> None:
         st.session_state.pk_hossz = float(t.hossz_cm)
         st.session_state.pk_szel = float(t.szelesseg_cm)
         st.session_state.pk_mag = float(t.magassag_cm)
+
+
+def orszag_valtozott() -> None:
+    """Ország váltásakor betölti a táblás €/km javaslatot, és törli a régi távolságot."""
+    v = rt.viszonylat(st.session_state.fd_f_orszag, st.session_state.fd_l_orszag)
+    javaslat = rt.javasolt_eur_per_km(v)
+    if javaslat is not None:
+        st.session_state.fd_eur_per_km = javaslat
+    st.session_state.pop("fd_km_forras", None)
+    st.session_state.pop("fd_km_hiba", None)
+
+
+def km_lekerese(honnan: str, hova: str, kulcs: str) -> None:
+    try:
+        t = tav.google_tavolsag(honnan, hova, kulcs)
+    except tav.TavolsagHiba as exc:
+        st.session_state.fd_km_hiba = str(exc)
+        return
+    st.session_state.fd_km = float(round(t.km))
+    st.session_state.fd_km_forras = f"Google Maps: {szam(t.km, 1)} km ({honnan} → {hova})"
+    st.session_state.pop("fd_km_hiba", None)
 
 
 def alaphelyzet() -> None:
@@ -362,6 +417,9 @@ def allapot_init() -> None:
         "pk_tipus": ALAP_TIPUS, "pk_hossz": float(alap_pk.hossz_cm), "pk_szel": float(alap_pk.szelesseg_cm),
         "pk_mag": float(alap_pk.magassag_cm), "pk_teherbiras": ALAP_TEHERBIRAS_KG, "pk_szabad": False,
         "kg_per_ldm": ALAP_KG_PER_LDM, "kerekites": ALAP_KEREKITES, "idokorlat": 3.0,
+        "fd_dijalap": DIJALAP_KM, "fd_f_orszag": rt.HAZAI, "fd_l_orszag": "AT", "fd_km": 0.0,
+        "fd_eur_per_km": rt.javasolt_eur_per_km(rt.viszonylat(rt.HAZAI, "AT")), "fd_szolg": fp.SZOLG_AUTO,
+        "fd_csoport": -1, "arfolyam": 400.0,
     }.items():
         st.session_state.setdefault(kulcs, ertek)
     for kulcs, forras in (("pk_szabad_hossz", "pk_hossz"), ("pk_szabad_szel", "pk_szel"), ("pk_szabad_mag", "pk_mag")):
@@ -525,6 +583,12 @@ with tab_ai:
         with r1:
             st.markdown(f'<div class="ai-mezo">Felrakási hely {bizonyossag_jelveny(adat.felrakas_hely.bizonyossag)}</div>', unsafe_allow_html=True)
             st.text_input("Felrakási hely", key="ai_f_hely", label_visibility="collapsed")
+            o1, o2 = st.columns(2)
+            o1.markdown(f'<div class="ai-mezo">Ország {bizonyossag_jelveny(adat.felrakas_orszagkod.bizonyossag)}</div>', unsafe_allow_html=True)
+            o1.selectbox("Felrakási ország", [""] + ORSZAG_KODOK, key="ai_f_orszag", label_visibility="collapsed",
+                         format_func=lambda kd: "–" if not kd else rt.orszag_cimke(kd))
+            o2.markdown(f'<div class="ai-mezo">Irányítószám {bizonyossag_jelveny(adat.felrakas_irsz.bizonyossag)}</div>', unsafe_allow_html=True)
+            o2.text_input("Felrakási irányítószám", key="ai_f_irsz", label_visibility="collapsed")
             st.markdown(f'<div class="ai-mezo">Felrakási cím {bizonyossag_jelveny(adat.felrakas_cim.bizonyossag)}</div>', unsafe_allow_html=True)
             st.text_input("Felrakási cím", key="ai_f_cim", label_visibility="collapsed")
             st.markdown(f'<div class="ai-mezo">Felrakási időpont {bizonyossag_jelveny(adat.felrakas_datum.bizonyossag)}</div>', unsafe_allow_html=True)
@@ -532,6 +596,12 @@ with tab_ai:
         with r2:
             st.markdown(f'<div class="ai-mezo">Lerakási hely {bizonyossag_jelveny(adat.lerakas_hely.bizonyossag)}</div>', unsafe_allow_html=True)
             st.text_input("Lerakási hely", key="ai_l_hely", label_visibility="collapsed")
+            o3, o4 = st.columns(2)
+            o3.markdown(f'<div class="ai-mezo">Ország {bizonyossag_jelveny(adat.lerakas_orszagkod.bizonyossag)}</div>', unsafe_allow_html=True)
+            o3.selectbox("Lerakási ország", [""] + ORSZAG_KODOK, key="ai_l_orszag", label_visibility="collapsed",
+                         format_func=lambda kd: "–" if not kd else rt.orszag_cimke(kd))
+            o4.markdown(f'<div class="ai-mezo">Irányítószám {bizonyossag_jelveny(adat.lerakas_irsz.bizonyossag)}</div>', unsafe_allow_html=True)
+            o4.text_input("Lerakási irányítószám", key="ai_l_irsz", label_visibility="collapsed")
             st.markdown(f'<div class="ai-mezo">Lerakási cím {bizonyossag_jelveny(adat.lerakas_cim.bizonyossag)}</div>', unsafe_allow_html=True)
             st.text_input("Lerakási cím", key="ai_l_cim", label_visibility="collapsed")
             st.markdown(f'<div class="ai-mezo">Lerakási időpont {bizonyossag_jelveny(adat.lerakas_datum.bizonyossag)}</div>', unsafe_allow_html=True)
@@ -586,6 +656,8 @@ with tab_ai:
                           "ellenőrzéshez és a forgathatóság / ráterhelhetőség pontosításához.")
                 if kihagyva:
                     uzenet += f" {kihagyva} tétel kimaradt hiányzó alapadat (darab, méret vagy tömeg) miatt."
+                if st.session_state.get("ai_atadott_viszonylat"):
+                    uzenet += " A viszonylat (ország, irányítószám, település) átkerült a 💶 Fuvardíj fülre."
                 st.markdown(uzenet_html(Uzenet("ok", uzenet)), unsafe_allow_html=True)
             else:
                 st.markdown(uzenet_html(Uzenet(
@@ -908,39 +980,43 @@ with tab_visszaig:
 # ---------------------------------------------------------------------------
 
 dij: DijEredmeny | None = None
+km_eredmeny: fp.KmDijEredmeny | None = None
+
+
+def viszonylat_cim(elotag: str) -> str:
+    return tav.cim_szoveg(ss[f"fd_{elotag}_orszag"], ss.get(f"fd_{elotag}_irsz", ""), ss.get(f"fd_{elotag}_telepules", ""))
+
 
 with tab_dij:
     st.markdown(
         uzenet_html(Uzenet(
             "info",
-            "A díjszámítás becslés. Nem minden fuvarozó áraz LDM alapján – gyakori a "
-            "viszonylatonkénti teljes kocsi ár, a tömeg- vagy térfogatalapú (kg, m³) díjazás, "
-            "illetve a minimumdíj. Az eredményt a fuvarozói ajánlattal mindig vesse össze.",
+            "A díjszámítás becslés. A km-alapú díj a Finian-díjtáblákon alapul (FTL €/km, LTL-szorzó); "
+            "az eredményt a fuvarozói ajánlattal mindig vesse össze.",
         )),
         unsafe_allow_html=True,
     )
 
-    p1, p2, p3 = st.columns(3)
-    penznem = p1.radio("Pénznem", ["EUR", "HUF"], horizontal=True, key="penznem")
+    d1, d2 = st.columns([2, 1])
+    dijalap = d1.radio("Díjszámítás alapja", [DIJALAP_KM, DIJALAP_LDM], key="fd_dijalap", horizontal=True)
+    penznem = d2.radio("Pénznem", ["EUR", "HUF"], horizontal=True, key="penznem")
     egyseg = "€" if penznem == "EUR" else "Ft"
-    dij_per_ldm = p2.number_input(
-        f"Fuvardíj ({egyseg}/LDM)", min_value=0.0, step=10.0 if penznem == "EUR" else 1000.0,
-        value=450.0 if penznem == "EUR" else 180000.0, format="%.2f" if penznem == "EUR" else "%.0f",
-        key=f"dij_per_ldm_{penznem}",
-    )
-    minimum_dij = p3.number_input(
-        f"Minimum fuvardíj ({egyseg})", min_value=0.0, step=10.0 if penznem == "EUR" else 1000.0,
-        value=0.0, format="%.2f" if penznem == "EUR" else "%.0f", key=f"minimum_{penznem}",
-        help="Ha az LDM-alapú díj ennél kevesebb, a minimumdíj érvényes. 0 = nincs.",
-    )
+    km_mod = dijalap == DIJALAP_KM
+    arfolyam = 1.0
+    if km_mod and penznem == "HUF":
+        arfolyam = st.number_input(
+            "Árfolyam (Ft/€)", min_value=1.0, max_value=2000.0, step=1.0, format="%.2f", key="arfolyam",
+            help="A díjtáblák euróban vannak; a km-alapú alapdíjat ezzel az árfolyammal váltja forintra.",
+        )
 
+    # --- LDM-alap (LDM-alapú díjnál és az LTL-szorzóhoz) -------------------------------
     l1, l2 = st.columns([2, 1])
     ldm_alap = l1.radio(
-        "Díjszámítás LDM-alapja",
+        "LDM-alap" + (" (az LTL-szorzóhoz)" if km_mod else ""),
         [LDM_ALAP_ELSZAMOLASI, LDM_ALAP_VISSZAIGAZOLT, LDM_ALAP_FIZIKAI, LDM_ALAP_ELMELETI, LDM_ALAP_KEZI],
         key="ldm_alap",
-        help="Elszámolási LDM = MAX(fizikai LDM, össztömeg ÷ index). A rakodás után megadott tényleges LDM "
-        "nem módosítja automatikusan a díjat.",
+        help="Elszámolási LDM = MAX(fizikai LDM, össztömeg ÷ index) – Daniel szabálya szerint mindig a nagyobb "
+        "paraméter számít. A rakodás után megadott tényleges LDM nem módosítja automatikusan a díjat.",
     )
     if ldm_alap == LDM_ALAP_KEZI:
         dij_ldm = l2.number_input(
@@ -966,6 +1042,122 @@ with tab_dij:
             dij_ldm = terv.elszamolas.elszamolasi_ldm
         l2.metric("Számítási alap", f"{szam(dij_ldm)} LDM")
 
+    kulso_alapdij: float | None = None
+    km_hiba: str | None = None
+    dij_per_ldm = 0.0
+
+    if km_mod:
+        # --- Viszonylat -------------------------------------------------------------------
+        st.markdown("###### Viszonylat")
+        oszlopok = st.columns(2)
+        for oszlop, elotag, cim in ((oszlopok[0], "f", "Felrakó"), (oszlopok[1], "l", "Lerakó")):
+            with oszlop:
+                st.selectbox(f"{cim} ország", ORSZAG_KODOK, key=f"fd_{elotag}_orszag",
+                             format_func=rt.orszag_cimke, on_change=orszag_valtozott)
+                i1, i2 = st.columns([1, 2])
+                i1.text_input(f"{cim} irányítószám", key=f"fd_{elotag}_irsz", placeholder="pl. 8000")
+                i2.text_input(f"{cim} település", key=f"fd_{elotag}_telepules", placeholder="pl. Székesfehérvár")
+
+        v = rt.viszonylat(ss.fd_f_orszag, ss.fd_l_orszag)
+        javaslat = rt.javasolt_eur_per_km(v)
+        if v.tiltott:
+            km_hiba = "BY és RU irányba a jelenlegi szankciók miatt nem biztosítunk szállítási szolgáltatást."
+            st.markdown(uzenet_html(Uzenet("hiba", km_hiba)), unsafe_allow_html=True)
+        elif v.egyedi:
+            st.markdown(uzenet_html(Uzenet(
+                "figyelmeztetes", "Egyedi díjas ország – ajánlat csak az alvállalkozói díj bekérése után adható. "
+                "Adja meg lent a kapott alvállalkozói díjat; a profit arra számolódik.")), unsafe_allow_html=True)
+        elif javaslat is None:
+            st.markdown(uzenet_html(Uzenet(
+                "figyelmeztetes", f"Erre a viszonylatra ({v.irany}) nincs táblás €/km javaslat – adja meg kézzel "
+                "a km-díjat. LTL-hez válasszon szorzócsoportot.")), unsafe_allow_html=True)
+
+        honnan, hova = viszonylat_cim("f"), viszonylat_cim("l")
+        if not v.tiltott:
+            if v.egyedi:
+                kulso_alapdij = st.number_input(
+                    "Alvállalkozói díj (€)", min_value=0.0, step=10.0, format="%.2f", key="fd_alvallalkozo",
+                ) * arfolyam
+                if kulso_alapdij <= 0:
+                    km_hiba = "Adja meg az alvállalkozói díjat."
+            else:
+                # --- Távolság ---------------------------------------------------------------
+                st.markdown("###### Távolság")
+                g_kulcs = tav.google_kulcs()
+                t1, t2 = st.columns([1, 2], vertical_alignment="bottom")
+                t1.number_input("Távolság (km)", min_value=0.0, max_value=10000.0, step=1.0, format="%.0f",
+                                key="fd_km", help="A Google Maps lekérdezés kitölti; kézzel is átírható.")
+                if g_kulcs:
+                    t2.button("📍 Távolság lekérése (Google Maps)", width="stretch", on_click=km_lekerese,
+                              args=(honnan, hova, g_kulcs))
+                    if ss.get("fd_km_hiba"):
+                        st.error(ss.fd_km_hiba)
+                else:
+                    t2.markdown(
+                        f'<div class="mini">Nincs Google Maps API-kulcs (GOOGLE_MAPS_API_KEY) – adja meg a km-t '
+                        f'kézzel. <a href="{html.escape(tav.utvonal_link(honnan, hova))}" target="_blank">'
+                        f'Útvonal megnyitása a Google Maps-ben ↗</a></div>', unsafe_allow_html=True)
+                if ss.get("fd_km_forras"):
+                    st.caption(ss.fd_km_forras)
+                if g_kulcs and (ss.get("fd_f_irsz") or ss.get("fd_f_telepules")) and (ss.get("fd_l_irsz") or ss.get("fd_l_telepules")):
+                    components.iframe(tav.beagyazott_terkep_url(honnan, hova, g_kulcs), height=380)
+
+                # --- Díjparaméterek ---------------------------------------------------------
+                st.markdown("###### FTL / LTL díj")
+                k1, k2, k3 = st.columns(3)
+                k1.number_input(
+                    "Km-díj (€/km)", min_value=0.0, max_value=20.0, step=0.05, format="%.2f", key="fd_eur_per_km",
+                    help="Az ország és az irány szerinti javaslat betöltődik; szükség esetén átírható.",
+                )
+                if javaslat is not None:
+                    k1.caption(f"Javaslat: {v.partner} {v.irany} – {szam(javaslat)} €/km")
+                szolg = k2.radio("Szolgáltatás", list(SZOLG_CIMKE), key="fd_szolg", format_func=SZOLG_CIMKE.get)
+                csoport_valasztas = k3.selectbox(
+                    "LTL-szorzócsoport", [-1, 0, 1, 2, 3], key="fd_csoport",
+                    format_func=lambda c: "Automatikus (ország szerint)" if c < 0 else rt.LTL_CSOPORT_CIMKE[c],
+                )
+                if ss.fd_km <= 0:
+                    km_hiba = "Adja meg a távolságot (km), vagy kérje le a Google Maps-ből."
+                else:
+                    try:
+                        km_eredmeny = fp.szamol_km_dij(
+                            ss.fd_f_orszag, ss.fd_l_orszag, km=float(ss.fd_km), eur_per_km=float(ss.fd_eur_per_km),
+                            ldm=float(dij_ldm) if dij_ldm else None, szolgaltatas=szolg,
+                            csoport_felulir=None if csoport_valasztas < 0 else csoport_valasztas,
+                        )
+                        kulso_alapdij = km_eredmeny.alapdij * arfolyam
+                    except fp.KmDijHiba as exc:
+                        km_hiba = str(exc)
+                if km_hiba:
+                    st.markdown(uzenet_html(Uzenet("figyelmeztetes", km_hiba)), unsafe_allow_html=True)
+                if km_eredmeny:
+                    e = km_eredmeny
+                    ltl_al = "komplett rakomány" if e.szorzo is None else (
+                        f"{szam(e.dijszamitasi_ldm, 1)} ldm · {rt.LTL_CSOPORT_CIMKE[e.csoport]}")
+                    st.markdown(
+                        '<div class="kartya-racs">'
+                        + kartya("Számítási távolság", f"{e.km_kerekitett} km", f"tényleges: {szam(e.km, 0)} km · felfelé 100-ra")
+                        + kartya("FTL-díj", penz(e.ftl_dij * arfolyam, penznem), f"{e.km_kerekitett} km × {szam(e.eur_per_km)} €/km")
+                        + kartya("LTL-szorzó", szam(e.szorzo, 4) if e.szorzo is not None else "–", ltl_al)
+                        + kartya(f"{e.szolgaltatas}-alapdíj", penz(e.alapdij * arfolyam, penznem),
+                                 "FTL-díj × szorzó" if e.szorzo is not None else "km × €/km", "sotet")
+                        + "</div>",
+                        unsafe_allow_html=True,
+                    )
+                    uzenetek_megjelenitese([Uzenet("info", m) for m in e.megjegyzesek])
+    else:
+        dij_per_ldm = st.number_input(
+            f"Fuvardíj ({egyseg}/LDM)", min_value=0.0, step=10.0 if penznem == "EUR" else 1000.0,
+            value=450.0 if penznem == "EUR" else 180000.0, format="%.2f" if penznem == "EUR" else "%.0f",
+            key=f"dij_per_ldm_{penznem}",
+        )
+
+    minimum_dij = st.number_input(
+        f"Minimum fuvardíj ({egyseg})", min_value=0.0, step=10.0 if penznem == "EUR" else 1000.0,
+        value=0.0, format="%.2f" if penznem == "EUR" else "%.0f", key=f"minimum_{penznem}",
+        help="Ha az alapdíj ennél kevesebb, a minimumdíj érvényes. 0 = nincs.",
+    )
+
     st.markdown("###### Felárak")
     f1, f2, f3, f4, f5 = st.columns(5)
     utdij = f1.number_input(f"Útdíj ({egyseg})", min_value=0.0, step=10.0, value=0.0, key=f"utdij_{penznem}")
@@ -979,42 +1171,52 @@ with tab_dij:
     )
     egyeb_felar = f5.number_input(f"Egyéb felár ({egyseg})", min_value=0.0, step=10.0, value=0.0, key=f"egyeb_{penznem}")
 
-    st.markdown("###### Fuvarszervezői árképzés")
+    st.markdown("###### Profit")
     a1, a2 = st.columns([2, 1])
     arazas = a1.radio(
-        "Árképzés módja", [ARAZAS_HASZONKULCS, ARAZAS_ARRES], key="arazas",
-        help="Haszonkulcs: ár = költség × (1 + h). Árrés: ár = költség ÷ (1 − a). "
-        "Ugyanaz a százalék a két módszerrel eltérő árat ad!",
+        "Profit megadása", [ARAZAS_HASZONKULCS, ARAZAS_ARRES, ARAZAS_FIX], key="arazas",
+        help="Haszonkulcs: ár = költség × (1 + h). Árrés: ár = költség ÷ (1 − a). Fix: ár = költség + összeg. "
+        "Ugyanaz a százalék a két százalékos módszerrel eltérő árat ad!",
     )
-    szazalek = a2.number_input(
-        "Haszonkulcs (%)" if arazas == ARAZAS_HASZONKULCS else "Árrés (%)",
-        min_value=0.0, max_value=1000.0 if arazas == ARAZAS_HASZONKULCS else 99.9,
-        step=1.0, value=15.0, key=f"szazalek_{arazas}",
-    )
+    szazalek, fix_profit = 0.0, 0.0
+    if arazas == ARAZAS_FIX:
+        fix_profit = a2.number_input(f"Profit ({egyseg})", min_value=0.0, step=10.0, value=0.0, key=f"fix_profit_{penznem}")
+    else:
+        szazalek = a2.number_input(
+            "Haszonkulcs (%)" if arazas == ARAZAS_HASZONKULCS else "Árrés (%)",
+            min_value=0.0, max_value=1000.0 if arazas == ARAZAS_HASZONKULCS else 99.9,
+            step=1.0, value=15.0, key=f"szazalek_{arazas}",
+        )
 
-    try:
-        dij = szamol_dij(DijParameterek(
-            ldm=dij_ldm, dij_per_ldm=dij_per_ldm, penznem=penznem, minimum_dij=minimum_dij,
-            utdij=utdij, uzemanyag_pct=uzemanyag_pct, varakozas_ora=varakozas_ora,
-            varakozas_oradij=varakozas_oradij, egyeb_felar=egyeb_felar,
-            arazas_mod="haszonkulcs" if arazas == ARAZAS_HASZONKULCS else "arres", szazalek=szazalek,
-        ))
-    except ValueError as exc:
-        st.error(str(exc))
+    if not (km_mod and (km_hiba or kulso_alapdij is None)):
+        try:
+            dij = szamol_dij(DijParameterek(
+                ldm=dij_ldm, dij_per_ldm=dij_per_ldm, penznem=penznem, minimum_dij=minimum_dij,
+                utdij=utdij, uzemanyag_pct=uzemanyag_pct, varakozas_ora=varakozas_ora,
+                varakozas_oradij=varakozas_oradij, egyeb_felar=egyeb_felar,
+                arazas_mod=ARAZAS_MOD[arazas], szazalek=szazalek, fix_profit=fix_profit,
+                kulso_alapdij=kulso_alapdij if km_mod else None,
+            ))
+        except ValueError as exc:
+            st.error(str(exc))
 
     if dij:
-        alap_al = "minimumdíj alkalmazva" if dij.minimum_alkalmazva else f"{szam(dij.ldm)} LDM × {penz(dij_per_ldm, penznem)}"
+        if dij.minimum_alkalmazva:
+            alap_al = "minimumdíj alkalmazva"
+        elif km_mod and km_eredmeny:
+            alap_al = f"{km_eredmeny.szolgaltatas} · {km_eredmeny.km_kerekitett} km"
+        elif km_mod:
+            alap_al = "alvállalkozói díj"
+        else:
+            alap_al = f"{szam(dij.ldm)} LDM × {penz(dij_per_ldm, penznem)}"
         st.markdown(
             '<div class="kartya-racs">'
             + kartya("Alapfuvardíj", penz(dij.alapdij, penznem), alap_al)
             + kartya("Felárak összesen", penz(dij.felarak_osszesen, penznem))
-            + kartya("Teljes beszerzési költség", penz(dij.beszerzesi_koltseg, penznem), "fuvarozói díj + felárak", "sotet")
-            + kartya("Ügyfélnek ajánlott ár", penz(dij.ajanlott_ar, penznem), "nettó, ÁFA nélkül", "zold")
-            + kartya("Várható bruttó fedezet", penz(dij.fedezet, penznem), "ajánlott ár − beszerzési költség", "zold")
-            + kartya(
-                "Fedezeti hányad (árrés)", f"{szam(dij.fedezeti_hanyad_pct, 1)} %",
-                f"haszonkulcs: {szam(dij.haszonkulcs_pct, 1)} %", "zold",
-            )
+            + kartya("Teljes beszerzési költség", penz(dij.beszerzesi_koltseg, penznem), "alapdíj + felárak", "sotet")
+            + kartya("Profit", penz(dij.fedezet, penznem),
+                     f"árrés {szam(dij.fedezeti_hanyad_pct, 1)} % · haszonkulcs {szam(dij.haszonkulcs_pct, 1)} %", "zold")
+            + kartya("Total díj", penz(dij.ajanlott_ar, penznem), "ügyfélnek ajánlott ár, nettó, ÁFA nélkül", "zold")
             + "</div>",
             unsafe_allow_html=True,
         )
@@ -1026,8 +1228,8 @@ with tab_dij:
                 (f"Várakozási díj ({szam(varakozas_ora, 1)} óra)", dij.varakozasi_dij),
                 ("Egyéb felár", dij.egyeb_felar),
                 ("Teljes beszerzési költség", dij.beszerzesi_koltseg),
-                ("Fuvarszervezői fedezet", dij.fedezet),
-                ("Ügyfélnek ajánlott ár", dij.ajanlott_ar),
+                ("Profit", dij.fedezet),
+                ("Total díj (ügyfélnek ajánlott ár)", dij.ajanlott_ar),
             ],
             columns=["Tétel", "Összeg"],
         )
@@ -1065,7 +1267,8 @@ def csoportok_df(terv: RakodasiTerv) -> pd.DataFrame:
     return pd.DataFrame(sorok)
 
 
-def osszesito_df(terv: RakodasiTerv, dij: DijEredmeny | None, kovetes: LdmKovetes | None) -> pd.DataFrame:
+def osszesito_df(terv: RakodasiTerv, dij: DijEredmeny | None, kovetes: LdmKovetes | None,
+                 km_e: fp.KmDijEredmeny | None = None) -> pd.DataFrame:
     pk, p, el = terv.potkocsi, terv.pakolas, terv.elszamolas
     sorok = [
         ("Pótkocsi", f"{pk.tipus}: {pk.hossz_cm:g} × {pk.szelesseg_cm:g} × {pk.magassag_cm:g}", "cm"),
@@ -1094,6 +1297,22 @@ def osszesito_df(terv: RakodasiTerv, dij: DijEredmeny | None, kovetes: LdmKovete
             ("Visszaigazolt LDM", kovetes.visszaigazolt_ldm if kovetes.visszaigazolt_ldm is not None else "", "LDM"),
             ("Tényleges rakodási LDM", kovetes.tenyleges_ldm if kovetes.tenyleges_ldm is not None else "", "LDM"),
         ]
+    if km_e:
+        v = km_e.viszonylat
+        sorok += [
+            ("Viszonylat", f"{v.felrako} → {v.lerako} ({v.irany})", ""),
+            ("Tényleges távolság", round(km_e.km, 1), "km"),
+            ("Számítási távolság", km_e.km_kerekitett, "km"),
+            ("Km-díj", km_e.eur_per_km, "€/km"),
+            ("FTL-díj", round(km_e.ftl_dij, 2), "EUR"),
+            ("Szolgáltatás", km_e.szolgaltatas, ""),
+        ]
+        if km_e.szorzo is not None:
+            sorok += [
+                ("Díjszámítási LDM (0,1-re felkerekítve)", km_e.dijszamitasi_ldm, "LDM"),
+                ("LTL-szorzócsoport", rt.LTL_CSOPORT_CIMKE[km_e.csoport], ""),
+                ("LTL-szorzó", km_e.szorzo, ""),
+            ]
     if dij:
         pn = dij.penznem
         sorok += [
@@ -1173,7 +1392,7 @@ with tab_eredmeny:
         idobelyeg = datetime.now().strftime("%Y%m%d_%H%M")
         e1, e2 = st.columns(2)
         e1.download_button(
-            "⬇️ Összesítő és díjkalkuláció (CSV)", csv_bajtok(osszesito_df(terv, dij, kovetes)),
+            "⬇️ Összesítő és díjkalkuláció (CSV)", csv_bajtok(osszesito_df(terv, dij, kovetes, km_eredmeny)),
             file_name=f"fuvarkalkulacio_osszesito_{idobelyeg}.csv", mime="text/csv", width="stretch",
         )
         e2.download_button(
@@ -1201,7 +1420,9 @@ with tab_sugo:
    az elhelyezési koordináták és a szabad területek láthatók.
 4. **Visszaigazolás** fül: töltse le a rakodási tervet (HTML) és küldje el a fuvarozónak. Rögzítse a visszaigazolás
    állapotát és a visszaigazolt LDM-et, majd a rakodás után a tényleges LDM-et és az eltérés indokát.
-5. **Fuvardíj** fül: válassza ki a díjszámítás LDM-alapját (alapértelmezés: elszámolási LDM), a díjat és a felárakat.
+5. **Fuvardíj** fül: alapértelmezés a **km-alapú** díj. Adja meg a felrakó és a lerakó országát, irányítószámát,
+   a távolságot (Google Maps-kulccsal automatikusan), ellenőrizze a javasolt €/km-t, majd a felárakat és a profitot.
+   Az *LDM-alapú* mód a korábbi díj/LDM számítás.
 
 ### Számítási módszer
 
@@ -1237,9 +1458,23 @@ a rakodás után megadott LDM alapján; az elszámolást a visszaigazolt ajánla
 
 ### Fuvardíj
 
+**Km-alapú díj (Finian-díjtábla).** A távolság felfelé kerekül a következő egész 100 km-re (216 km → 300 km).
+
 | Tétel | Képlet |
 |---|---|
-| Alapfuvardíj | max(LDM × díj/LDM, minimumdíj) |
+| FTL-díj | kerekített km × €/km |
+| LTL-díj | FTL-díj × szorzó (díjszámítási ldm = elszámolási LDM 0,1-re felkerekítve, országcsoport szerint) |
+| Automatikus | 12,1 ldm alatt LTL, felette FTL (a szorzó ott 1) |
+
+Javasolt €/km (Magyarországról indexálva, export / import): AT, SK, CZ, SI, HR, RO, BG 2,0 / 2,0 ·
+PL 1,5 / 2,0 · DE, IT, BE, NL, LU 1,6 / 1,8 · FR 1,8 / 1,6 · PT, ES, LT, LV, EE 1,3 / 1,3.
+Egyedi díjas országok (GB, IE, CH, DK, SE, NO, FI, GR, MD, AL, BIH, SRB, MNE, UA, TR, GE, AZ, AM): csak alvállalkozói
+díj alapján. BY és RU: a szankciók miatt nincs szállítás. Belföldi és harmadik országok közötti fuvarra nincs táblás
+díj – a km-díjat kézzel kell megadni.
+
+| Tétel | Képlet |
+|---|---|
+| Alapfuvardíj | max(km-alapú díj vagy LDM × díj/LDM, minimumdíj) |
 | Üzemanyag-pótdíj | alapdíj × pótdíj % |
 | Várakozási díj | órák × óradíj |
 | Beszerzési költség | alapdíj + összes felár |
@@ -1247,7 +1482,7 @@ a rakodás után megadott LDM alapján; az elszámolást a visszaigazolt ajánla
 | Fedezeti hányad (árrés) | fedezet ÷ ajánlott ár |
 
 *Haszonkulcs* a költségre vetít (ár = költség × (1 + h)), *árrés* az eladási árra (ár = költség ÷ (1 − a)):
-25 % haszonkulcs = 20 % árrés.
+25 % haszonkulcs = 20 % árrés. *Fix összeg*: ár = költség + kézzel megadott profit. **Total díj** = ajánlott ár.
 
 ### Korlátok
 
