@@ -1099,8 +1099,13 @@ with tab_dij:
                         f'Útvonal megnyitása a Google Maps-ben ↗</a></div>', unsafe_allow_html=True)
                 if ss.get("fd_km_forras"):
                     st.caption(ss.fd_km_forras)
-                if g_kulcs and (ss.get("fd_f_irsz") or ss.get("fd_f_telepules")) and (ss.get("fd_l_irsz") or ss.get("fd_l_telepules")):
-                    components.iframe(tav.beagyazott_terkep_url(honnan, hova, g_kulcs), height=380)
+                # A térkép külön, webhelyre korlátozott kulcsot használ.
+                # A szerveroldali Routes API kulcsot soha ne adjuk át a böngészőnek.
+                embed_kulcs = str(st.secrets.get("GOOGLE_MAPS_EMBED_API_KEY", "")).strip()
+                if embed_kulcs and (ss.get("fd_f_irsz") or ss.get("fd_f_telepules")) and (ss.get("fd_l_irsz") or ss.get("fd_l_telepules")):
+                    components.iframe(tav.beagyazott_terkep_url(honnan, hova, embed_kulcs), height=380)
+                elif not embed_kulcs:
+                    st.caption("A beágyazott térképhez állítsa be a GOOGLE_MAPS_EMBED_API_KEY kulcsot a Streamlit Secretsben.")
 
                 # --- Díjparaméterek ---------------------------------------------------------
                 st.markdown("###### FTL / LTL díj")
