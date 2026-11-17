@@ -1074,31 +1074,31 @@ with tab_dij:
 
         honnan, hova = viszonylat_cim("f"), viszonylat_cim("l")
         # Az útvonal megjelenítése független az ország díjszabási besorolásától.
-            # --- Távolság ---------------------------------------------------------------
-            st.markdown("###### Távolság")
-            g_kulcs = tav.google_kulcs()
-            t1, t2 = st.columns([1, 2], vertical_alignment="bottom")
-            t1.number_input("Távolság (km)", min_value=0.0, max_value=10000.0, step=1.0, format="%.0f",
-                            key="fd_km", help="A Google Maps lekérdezés kitölti; kézzel is átírható.")
-            if g_kulcs:
-                t2.button("📍 Távolság lekérése (Google Maps)", width="stretch", on_click=km_lekerese,
-                          args=(honnan, hova, g_kulcs))
-                if ss.get("fd_km_hiba"):
-                    st.error(ss.fd_km_hiba)
-            else:
-                t2.markdown(
-                    f'<div class="mini">Nincs Google Maps API-kulcs (GOOGLE_MAPS_API_KEY) – adja meg a km-t '
-                    f'kézzel. <a href="{html.escape(tav.utvonal_link(honnan, hova))}" target="_blank">'
-                    f'Útvonal megnyitása a Google Maps-ben ↗</a></div>', unsafe_allow_html=True)
-            if ss.get("fd_km_forras"):
-                st.caption(ss.fd_km_forras)
-            # A térkép külön, webhelyre korlátozott kulcsot használ.
-            # A szerveroldali Routes API kulcsot soha ne adjuk át a böngészőnek.
-            embed_kulcs = str(st.secrets.get("GOOGLE_MAPS_EMBED_API_KEY", "")).strip()
-            if embed_kulcs and (ss.get("fd_f_irsz") or ss.get("fd_f_telepules")) and (ss.get("fd_l_irsz") or ss.get("fd_l_telepules")):
-                components.iframe(tav.beagyazott_terkep_url(honnan, hova, embed_kulcs), height=380)
-            elif not embed_kulcs:
-                st.caption("A beágyazott térképhez állítsa be a GOOGLE_MAPS_EMBED_API_KEY kulcsot a Streamlit Secretsben.")
+        # --- Távolság ---------------------------------------------------------------
+        st.markdown("###### Távolság")
+        g_kulcs = tav.google_kulcs()
+        t1, t2 = st.columns([1, 2], vertical_alignment="bottom")
+        t1.number_input("Távolság (km)", min_value=0.0, max_value=10000.0, step=1.0, format="%.0f",
+                        key="fd_km", help="A Google Maps lekérdezés kitölti; kézzel is átírható.")
+        if g_kulcs:
+            t2.button("📍 Távolság lekérése (Google Maps)", width="stretch", on_click=km_lekerese,
+                      args=(honnan, hova, g_kulcs))
+            if ss.get("fd_km_hiba"):
+                st.error(ss.fd_km_hiba)
+        else:
+            t2.markdown(
+                f'<div class="mini">Nincs Google Maps API-kulcs (GOOGLE_MAPS_API_KEY) – adja meg a km-t '
+                f'kézzel. <a href="{html.escape(tav.utvonal_link(honnan, hova))}" target="_blank">'
+                f'Útvonal megnyitása a Google Maps-ben ↗</a></div>', unsafe_allow_html=True)
+        if ss.get("fd_km_forras"):
+            st.caption(ss.fd_km_forras)
+        # A térkép külön, webhelyre korlátozott kulcsot használ.
+        # A szerveroldali Routes API kulcsot soha ne adjuk át a böngészőnek.
+        embed_kulcs = str(st.secrets.get("GOOGLE_MAPS_EMBED_API_KEY", "")).strip()
+        if embed_kulcs and (ss.get("fd_f_irsz") or ss.get("fd_f_telepules")) and (ss.get("fd_l_irsz") or ss.get("fd_l_telepules")):
+            components.iframe(tav.beagyazott_terkep_url(honnan, hova, embed_kulcs), height=380)
+        elif not embed_kulcs:
+            st.caption("A beágyazott térképhez állítsa be a GOOGLE_MAPS_EMBED_API_KEY kulcsot a Streamlit Secretsben.")
 
         if not v.tiltott:
             if v.egyedi:
