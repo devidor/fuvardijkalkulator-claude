@@ -6,6 +6,7 @@ Indítás:  streamlit run app.py
 from __future__ import annotations
 
 import html
+import os
 from datetime import date, datetime
 
 import pandas as pd
@@ -429,6 +430,21 @@ def irsz_valtozott(elotag: str) -> None:
     if len(talalat.telepulesek) > 1:
         ss_[f"fd_{elotag}_telep_opciok"] = list(talalat.telepulesek)
         ss_[f"fd_{elotag}_telep_valaszto"] = talalat.elso
+
+
+def terkep_embed_kulcs() -> str | None:
+    """A beágyazott térkép külön, webhelyre korlátozott kulcsa (GOOGLE_MAPS_EMBED_API_KEY).
+
+    Az app.py-ban van (nem a distance.py-ban), mert a Streamlit Cloud frissítéskor nem
+    tölti újra a már importált modulokat. Secrets-fájl hiányában None.
+    """
+    kulcs = os.environ.get("GOOGLE_MAPS_EMBED_API_KEY", "").strip()
+    if kulcs:
+        return kulcs
+    try:
+        return str(st.secrets.get("GOOGLE_MAPS_EMBED_API_KEY", "")).strip() or None
+    except Exception:
+        return None
 
 
 def telepules_valasztva(elotag: str) -> None:
@@ -1144,7 +1160,7 @@ with tab_dij:
             st.caption(ss.fd_km_forras)
         # A térkép külön, webhelyre korlátozott kulcsot használ.
         # A szerveroldali Routes API kulcsot soha ne adjuk át a böngészőnek.
-        embed_kulcs = tav.embed_kulcs()
+        embed_kulcs = terkep_embed_kulcs()
         if embed_kulcs and (ss.get("fd_f_irsz") or ss.get("fd_f_telepules")) and (ss.get("fd_l_irsz") or ss.get("fd_l_telepules")):
             components.iframe(tav.beagyazott_terkep_url(honnan, hova, embed_kulcs), height=380)
         elif not embed_kulcs:
