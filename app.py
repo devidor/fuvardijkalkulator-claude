@@ -418,6 +418,13 @@ def iranyitoszam_valtozott(elotag: str) -> None:
     ss[f"fd_{elotag}_telepules"] = telepules
 
 
+def fuvar_orszag_valtozott(elotag: str) -> None:
+    """Országváltáskor a régi település törlése és új keresés."""
+    st.session_state[f"fd_{elotag}_telepules"] = ""
+    orszag_valtozott()
+    iranyitoszam_valtozott(elotag)
+
+
 def km_lekerese(honnan: str, hova: str, kulcs: str) -> None:
     try:
         t = tav.google_tavolsag(honnan, hova, kulcs)
@@ -1076,7 +1083,7 @@ with tab_dij:
         for oszlop, elotag, cim in ((oszlopok[0], "f", "Felrakó"), (oszlopok[1], "l", "Lerakó")):
             with oszlop:
                 st.selectbox(f"{cim} ország", ORSZAG_KODOK, key=f"fd_{elotag}_orszag",
-                             format_func=rt.orszag_cimke, on_change=orszag_valtozott)
+                             format_func=rt.orszag_cimke, on_change=fuvar_orszag_valtozott, args=(elotag,))
                 i1, i2 = st.columns([1, 2])
                 i1.text_input(f"{cim} irányítószám", key=f"fd_{elotag}_irsz", placeholder="pl. 8000", on_change=iranyitoszam_valtozott, args=(elotag,))
                 i2.text_input(f"{cim} település", key=f"fd_{elotag}_telepules", placeholder="pl. Székesfehérvár")
