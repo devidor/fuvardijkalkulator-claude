@@ -395,6 +395,36 @@ def orszag_valtozott() -> None:
     st.session_state.pop("fd_km_hiba", None)
 
 
+def iranyitoszam_valtozott(elotag: str) -> None:
+    """Település kitöltése irányítószám módosításakor."""
+    ss = st.session_state
+    ss.pop("fd_km_forras", None)
+    ss.pop("fd_km_hiba", None)
+    ss["fd_km"] = 0.0
+    ss.pop(f"fd_{elotag}_geo_hiba", None)
+    irsz = str(ss.get(f"fd_{elotag}_irsz", "")).strip()
+    if not irsz:
+        ss[f"fd_{elotag}_telepules"] = ""
+        return
+    kulcs = tav.google_kulcs()
+    if not kulcs:
+        ss[f"fd_{elotag}_geo_hiba"] = "Nincs Google API-kulcs; a települést kézzel is megadhatja."
+        return
+    try:
+        telepules = tav.telepules_iranyitoszambol(ss[f"fd_{elotag}_orszag"], irsz, kulcs)
+    except tav.TavolsagHiba as exc:
+        ss[f"fd_{elotag}_geo_hiba"] = str(exc)
+        return
+    ss[f"fd_{elotag}_telepules"] = telepules
+
+
+def fuvar_orszag_valtozott(elotag: str) -> None:
+    """Országváltáskor a régi település törlése és új keresés."""
+    st.session_state[f"fd_{elotag}_telepules"] = ""
+    orszag_valtozott()
+    iranyitoszam_valtozott(elotag)
+
+
 def km_lekerese(honnan: str, hova: str, kulcs: str) -> None:
     try:
         t = tav.google_tavolsag(honnan, hova, kulcs)
@@ -1053,10 +1083,12 @@ with tab_dij:
         for oszlop, elotag, cim in ((oszlopok[0], "f", "Felrakó"), (oszlopok[1], "l", "Lerakó")):
             with oszlop:
                 st.selectbox(f"{cim} ország", ORSZAG_KODOK, key=f"fd_{elotag}_orszag",
-                             format_func=rt.orszag_cimke, on_change=orszag_valtozott)
+                             format_func=rt.orszag_cimke, on_change=fuvar_orszag_valtozott, args=(elotag,))
                 i1, i2 = st.columns([1, 2])
-                i1.text_input(f"{cim} irányítószám", key=f"fd_{elotag}_irsz", placeholder="pl. 8000")
+                i1.text_input(f"{cim} irányítószám", key=f"fd_{elotag}_irsz", placeholder="pl. 8000", on_change=iranyitoszam_valtozott, args=(elotag,))
                 i2.text_input(f"{cim} település", key=f"fd_{elotag}_telepules", placeholder="pl. Székesfehérvár")
+                if ss.get(f"fd_{elotag}_geo_hiba"):
+                    st.caption("⚠️ " + ss[f"fd_{elotag}_geo_hiba"])
 
         v = rt.viszonylat(ss.fd_f_orszag, ss.fd_l_orszag)
         javaslat = rt.javasolt_eur_per_km(v)
