@@ -15,6 +15,7 @@ import streamlit.components.v1 as components
 import distance as tav
 import email_extraction as ee
 import freight_pricing as fp
+import postal_lookup as irszk
 import rate_tables as rt
 from billing_config import ALAP_KEREKITES, ALAP_KG_PER_LDM, KEREKITESI_SZABALYOK, ElszamolasiKonfig
 from cargo_models import RAKLAP_TIPUSOK, RakomanyCsoport, Uzenet, validal_csoport
@@ -371,6 +372,8 @@ def atad_a_kalkulatornak() -> None:
             atadott_viszonylat = True
         st.session_state[f"fd_{elotag}_irsz"] = (st.session_state.get(f"ai_{elotag}_irsz") or "").strip()
         st.session_state[f"fd_{elotag}_telepules"] = telepules
+        if kod and st.session_state[f"fd_{elotag}_irsz"] and not telepules:
+            irsz_valtozott(elotag)
     if atadott_viszonylat:
         orszag_valtozott()
         st.session_state["fd_km"] = 0.0
@@ -385,14 +388,51 @@ def potkocsi_tipus_valtozott() -> None:
         st.session_state.pk_mag = float(t.magassag_cm)
 
 
-def orszag_valtozott() -> None:
-    """Ország váltásakor betölti a táblás €/km javaslatot, és törli a régi távolságot."""
+def orszag_valtozott(elotag: str | None = None) -> None:
+    """Ország váltásakor betölti a táblás €/km javaslatot, és törli a régi távolságot.
+
+    Ha az adott oldalon már van irányítószám, a települést az új ország szerint újra megkeresi.
+    """
     v = rt.viszonylat(st.session_state.fd_f_orszag, st.session_state.fd_l_orszag)
     javaslat = rt.javasolt_eur_per_km(v)
     if javaslat is not None:
         st.session_state.fd_eur_per_km = javaslat
     st.session_state.pop("fd_km_forras", None)
     st.session_state.pop("fd_km_hiba", None)
+    if elotag and (st.session_state.get(f"fd_{elotag}_irsz") or "").strip():
+        irsz_valtozott(elotag)
+
+
+@st.cache_data(ttl=7 * 24 * 3600, max_entries=2000, show_spinner=False)
+def telepules_gyorsitotarral(orszag: str, irsz: str, google_kulcs: str | None) -> "irszk.Talalat | None":
+    return irszk.telepules_keresese(orszag, irsz, google_kulcs)
+
+
+def irsz_valtozott(elotag: str) -> None:
+    """Irányítószám beírásakor automatikusan kitölti a települést (több találatnál választható)."""
+    ss_ = st.session_state
+    orszag = ss_.get(f"fd_{elotag}_orszag")
+    irsz = (ss_.get(f"fd_{elotag}_irsz") or "").strip()
+    ss_.pop(f"fd_{elotag}_telep_opciok", None)
+    ss_.pop(f"fd_{elotag}_telep_info", None)
+    if not irsz:
+        return
+    talalat = telepules_gyorsitotarral(orszag, irsz, tav.google_kulcs())
+    if not talalat:
+        ss_[f"fd_{elotag}_telep_info"] = (
+            f"A(z) {irsz} irányítószámhoz ({orszag}) nem található település – írja be kézzel."
+        )
+        return
+    ss_[f"fd_{elotag}_telepules"] = talalat.elso
+    if talalat.irsz and talalat.irsz != irsz:
+        ss_[f"fd_{elotag}_irsz"] = talalat.irsz
+    if len(talalat.telepulesek) > 1:
+        ss_[f"fd_{elotag}_telep_opciok"] = list(talalat.telepulesek)
+        ss_[f"fd_{elotag}_telep_valaszto"] = talalat.elso
+
+
+def telepules_valasztva(elotag: str) -> None:
+    st.session_state[f"fd_{elotag}_telepules"] = st.session_state[f"fd_{elotag}_telep_valaszto"]
 
 
 def km_lekerese(honnan: str, hova: str, kulcs: str) -> None:
@@ -1053,10 +1093,20 @@ with tab_dij:
         for oszlop, elotag, cim in ((oszlopok[0], "f", "Felrakó"), (oszlopok[1], "l", "Lerakó")):
             with oszlop:
                 st.selectbox(f"{cim} ország", ORSZAG_KODOK, key=f"fd_{elotag}_orszag",
-                             format_func=rt.orszag_cimke, on_change=orszag_valtozott)
-                i1, i2 = st.columns([1, 2])
-                i1.text_input(f"{cim} irányítószám", key=f"fd_{elotag}_irsz", placeholder="pl. 8000")
+                             format_func=rt.orszag_cimke, on_change=orszag_valtozott, args=(elotag,))
+                i1, i2 = st.columns([2, 3])
+                i1.text_input(f"{cim} irányítószám", key=f"fd_{elotag}_irsz", placeholder="pl. 8000",
+                              on_change=irsz_valtozott, args=(elotag,),
+                              help="Enter vagy kattintás után a település automatikusan kitöltődik.")
                 i2.text_input(f"{cim} település", key=f"fd_{elotag}_telepules", placeholder="pl. Székesfehérvár")
+                opciok = ss.get(f"fd_{elotag}_telep_opciok")
+                if opciok:
+                    st.selectbox(
+                        f"Több település ezzel az irányítószámmal ({len(opciok)})", opciok,
+                        key=f"fd_{elotag}_telep_valaszto", on_change=telepules_valasztva, args=(elotag,),
+                    )
+                if ss.get(f"fd_{elotag}_telep_info"):
+                    st.caption(ss[f"fd_{elotag}_telep_info"])
 
         v = rt.viszonylat(ss.fd_f_orszag, ss.fd_l_orszag)
         javaslat = rt.javasolt_eur_per_km(v)
