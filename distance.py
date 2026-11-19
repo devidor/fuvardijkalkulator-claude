@@ -46,6 +46,21 @@ def google_kulcs() -> Optional[str]:
         return None
 
 
+def embed_kulcs() -> Optional[str]:
+    """A beágyazott térkép külön, webhelyre korlátozott kulcsa (GOOGLE_MAPS_EMBED_API_KEY).
+
+    A szerveroldali Routes-kulcs soha nem kerül a böngészőbe. Secrets-fájl hiányában None.
+    """
+    kulcs = os.environ.get("GOOGLE_MAPS_EMBED_API_KEY", "").strip()
+    if kulcs:
+        return kulcs
+    try:
+        import streamlit as st
+        return str(st.secrets.get("GOOGLE_MAPS_EMBED_API_KEY", "")).strip() or None
+    except Exception:  # nincs secrets.toml, vagy nem Streamlit alatt fut
+        return None
+
+
 def cim_szoveg(orszag: str, irsz: str = "", telepules: str = "") -> str:
     """Geokódolható cím, pl. „8000 Székesfehérvár, Magyarország”."""
     hely = " ".join(x for x in (irsz.strip(), telepules.strip()) if x)
