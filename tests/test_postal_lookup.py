@@ -121,8 +121,8 @@ def test_tobb_talalatnal_valaszthato(monkeypatch):
     at = indit(monkeypatch, {("AT", "1230"): ["Wien", "Liesing"]})
     at.text_input(key="fd_l_irsz").set_value("1230")
     at.run()
-    assert at.text_input(key="fd_l_telepules").value == "Wien"
-    at.selectbox(key="fd_l_telep_valaszto").set_value("Liesing")
+    assert at.text_input(key="fd_l_telepules").value == ""  # többértelmű → választást kér
+    at.selectbox(key="fd_l_telep_valaszto").set_value(1)
     at.run()
     assert at.text_input(key="fd_l_telepules").value == "Liesing"
 

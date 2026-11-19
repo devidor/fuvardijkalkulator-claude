@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import html
 import os
+from dataclasses import astuple
 from datetime import date, datetime
 
 import pandas as pd
@@ -15,6 +16,7 @@ import streamlit.components.v1 as components
 
 import distance as tav
 import email_extraction as ee
+import country_detect as cd
 import freight_pricing as fp
 import postal_lookup as irszk
 import rate_tables as rt
@@ -389,19 +391,22 @@ def potkocsi_tipus_valtozott() -> None:
         st.session_state.pk_mag = float(t.magassag_cm)
 
 
-def orszag_valtozott(elotag: str | None = None) -> None:
-    """Ország váltásakor betölti a táblás €/km javaslatot, és törli a régi távolságot.
-
-    Ha az adott oldalon már van irányítószám, a települést az új ország szerint újra megkeresi.
-    """
+def javaslat_frissitese() -> None:
+    """A viszonylat változásakor betölti a táblás €/km javaslatot, és törli a régi távolságforrást."""
     v = rt.viszonylat(st.session_state.fd_f_orszag, st.session_state.fd_l_orszag)
     javaslat = rt.javasolt_eur_per_km(v)
     if javaslat is not None:
         st.session_state.fd_eur_per_km = javaslat
     st.session_state.pop("fd_km_forras", None)
     st.session_state.pop("fd_km_hiba", None)
+
+
+def orszag_valtozott(elotag: str | None = None) -> None:
+    """Kézi országváltás: €/km javaslat, és ha van irányítószám, a település keresése a
+    kiválasztott országban (a kézzel választott országot az automatika nem írja felül)."""
+    javaslat_frissitese()
     if elotag and (st.session_state.get(f"fd_{elotag}_irsz") or "").strip():
-        irsz_valtozott(elotag)
+        irsz_valtozott(elotag, orszag_rogzitett=True)
 
 
 @st.cache_data(ttl=7 * 24 * 3600, max_entries=2000, show_spinner=False)
@@ -409,27 +414,80 @@ def telepules_gyorsitotarral(orszag: str, irsz: str, google_kulcs: str | None) -
     return irszk.telepules_keresese(orszag, irsz, google_kulcs)
 
 
-def irsz_valtozott(elotag: str) -> None:
-    """Irányítószám beírásakor automatikusan kitölti a települést (több találatnál választható)."""
+@st.cache_data(ttl=7 * 24 * 3600, max_entries=2000, show_spinner=False)
+def orszag_felismerese_gyorsitotarral(irsz: str, google_kulcs: str, elonyben: str | None) -> list:
+    return [astuple(j) for j in cd.orszag_felismerese(irsz, google_kulcs, elonyben)]
+
+
+def hely_beallitasa(elotag: str, orszag: str, telepules: str, irsz: str) -> None:
+    """Ország + település (+ formázott irányítószám) egy találatból; országváltáskor új €/km javaslat."""
     ss_ = st.session_state
-    orszag = ss_.get(f"fd_{elotag}_orszag")
-    irsz = (ss_.get(f"fd_{elotag}_irsz") or "").strip()
-    ss_.pop(f"fd_{elotag}_telep_opciok", None)
-    ss_.pop(f"fd_{elotag}_telep_info", None)
+    if orszag and ss_.get(f"fd_{elotag}_orszag") != orszag:
+        ss_[f"fd_{elotag}_orszag"] = orszag
+        javaslat_frissitese()
+    ss_[f"fd_{elotag}_telepules"] = telepules
+    if irsz and irsz != (ss_.get(f"fd_{elotag}_irsz") or "").strip():
+        ss_[f"fd_{elotag}_irsz"] = irsz
+
+
+def irsz_valtozott(elotag: str, orszag_rogzitett: bool = False) -> None:
+    """Irányítószám beírásakor kitölti az országot és a települést.
+
+    - Google-kulccsal az országot is felismeri (Google Geocoding; ország és település
+      ugyanabból a találatból). „AT-1230” alakban az ország előre megadható.
+    - Kulcs nélkül, vagy ha a Google nem talál, a kiválasztott országban keres (Zippopotam).
+    - Több találatnál nem választ helyette: a felhasználónak kell kiválasztania.
+    """
+    ss_ = st.session_state
+    for nev in ("telep_opciok", "telep_info", "felismeres"):
+        ss_.pop(f"fd_{elotag}_{nev}", None)
+    elotag_kod, irsz = cd.orszag_elotag(ss_.get(f"fd_{elotag}_irsz") or "")
     if not irsz:
         return
-    talalat = telepules_gyorsitotarral(orszag, irsz, tav.google_kulcs())
-    if not talalat:
+    if elotag_kod:
+        ss_[f"fd_{elotag}_irsz"] = irsz
+        if ss_.get(f"fd_{elotag}_orszag") != elotag_kod:
+            ss_[f"fd_{elotag}_orszag"] = elotag_kod
+            javaslat_frissitese()
+        orszag_rogzitett = True
+    orszag = ss_.get(f"fd_{elotag}_orszag")
+    kulcs = tav.google_kulcs()
+    if not kulcs and not orszag_rogzitett:
+        ss_[f"fd_{elotag}_felismeres"] = (
+            "Az ország automatikus felismeréséhez Google-kulcs (Geocoding API) szükséges – a település "
+            "a kiválasztott országban kerül keresésre.")
+
+    jeloltek: list[tuple] = []
+    if kulcs and not orszag_rogzitett:
+        try:
+            jeloltek = orszag_felismerese_gyorsitotarral(irsz, kulcs, orszag)
+        except cd.GeocodeHiba as exc:
+            ss_[f"fd_{elotag}_felismeres"] = (
+                f"Az ország automatikus felismerése nem sikerült ({exc}) – ellenőrizze, hogy a kulcson "
+                "engedélyezve van-e a Geocoding API. A település a kiválasztott országban kerül keresésre.")
+        if jeloltek:
+            forras = "Google"
+    if not jeloltek:
+        talalat = telepules_gyorsitotarral(orszag, irsz, kulcs)
+        if talalat:
+            jeloltek = [(orszag, rt.ORSZAGOK.get(orszag, orszag), t, talalat.irsz or irsz)
+                        for t in talalat.telepulesek]
+            forras = "Google" if talalat.forras == "google" else "irányítószám-adatbázis"
+
+    if not jeloltek:
         ss_[f"fd_{elotag}_telep_info"] = (
-            f"A(z) {irsz} irányítószámhoz ({orszag}) nem található település – írja be kézzel."
-        )
+            f"A(z) {irsz} irányítószámhoz ({orszag}) nem található település – írja be kézzel.")
         return
-    ss_[f"fd_{elotag}_telepules"] = talalat.elso
-    if talalat.irsz and talalat.irsz != irsz:
-        ss_[f"fd_{elotag}_irsz"] = talalat.irsz
-    if len(talalat.telepulesek) > 1:
-        ss_[f"fd_{elotag}_telep_opciok"] = list(talalat.telepulesek)
-        ss_[f"fd_{elotag}_telep_valaszto"] = talalat.elso
+    if len(jeloltek) == 1:
+        o, nev, t, i = jeloltek[0]
+        hely_beallitasa(elotag, o, t, i)
+        if not ss_.get(f"fd_{elotag}_felismeres"):
+            ss_[f"fd_{elotag}_felismeres"] = f"Felismerve ({forras}): {nev} ({o}) – {t}, {i}"
+        return
+    # Többértelmű: a régi település törlődik, a felhasználó választ.
+    ss_[f"fd_{elotag}_telepules"] = ""
+    ss_[f"fd_{elotag}_telep_opciok"] = jeloltek
+    ss_[f"fd_{elotag}_telep_valaszto"] = None
 
 
 def terkep_embed_kulcs() -> str | None:
@@ -448,7 +506,15 @@ def terkep_embed_kulcs() -> str | None:
 
 
 def telepules_valasztva(elotag: str) -> None:
-    st.session_state[f"fd_{elotag}_telepules"] = st.session_state[f"fd_{elotag}_telep_valaszto"]
+    """Többértelmű találatnál a választott jelölt országa és települése kerül a mezőkbe."""
+    ss_ = st.session_state
+    idx = ss_.get(f"fd_{elotag}_telep_valaszto")
+    opciok = ss_.get(f"fd_{elotag}_telep_opciok") or []
+    if idx is None or not 0 <= idx < len(opciok):
+        return
+    o, nev, t, i = opciok[idx]
+    hely_beallitasa(elotag, o, t, i)
+    ss_[f"fd_{elotag}_felismeres"] = f"Kiválasztva: {nev} ({o}) – {t}, {i}"
 
 
 def km_lekerese(honnan: str, hova: str, kulcs: str) -> None:
@@ -1113,14 +1179,22 @@ with tab_dij:
                 i1, i2 = st.columns([2, 3])
                 i1.text_input(f"{cim} irányítószám", key=f"fd_{elotag}_irsz", placeholder="pl. 8000",
                               on_change=irsz_valtozott, args=(elotag,),
-                              help="Enter vagy kattintás után a település automatikusan kitöltődik.")
+                              help="Enter vagy kattintás után az ország és a település automatikusan "
+                              "kitöltődik (az országhoz Google-kulcs kell). Az ország előre is megadható, "
+                              "pl. AT-1230. Mindkét mező kézzel átírható.")
                 i2.text_input(f"{cim} település", key=f"fd_{elotag}_telepules", placeholder="pl. Székesfehérvár")
                 opciok = ss.get(f"fd_{elotag}_telep_opciok")
                 if opciok:
+                    st.markdown(uzenet_html(Uzenet(
+                        "figyelmeztetes", f"Az irányítószám többértelmű ({len(opciok)} találat) – válassza ki "
+                        "a megfelelő országot és települést.")), unsafe_allow_html=True)
                     st.selectbox(
-                        f"Több település ezzel az irányítószámmal ({len(opciok)})", opciok,
+                        "Találat kiválasztása", list(range(len(opciok))), index=None,
+                        placeholder="Válasszon…", format_func=lambda i, o=opciok: f"{o[i][1]} ({o[i][0]}) – {o[i][2]}, {o[i][3]}",
                         key=f"fd_{elotag}_telep_valaszto", on_change=telepules_valasztva, args=(elotag,),
                     )
+                if ss.get(f"fd_{elotag}_felismeres"):
+                    st.caption(ss[f"fd_{elotag}_felismeres"])
                 if ss.get(f"fd_{elotag}_telep_info"):
                     st.caption(ss[f"fd_{elotag}_telep_info"])
 
