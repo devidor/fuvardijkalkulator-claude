@@ -53,6 +53,38 @@ def cim_szoveg(orszag: str, irsz: str = "", telepules: str = "") -> str:
     return f"{hely}, {nev}" if hely else nev
 
 
+GEOCODING_URL = "https://maps.googleapis.com/maps/api/geocode/json"
+
+def telepules_iranyitoszambol(orszag: str, irsz: str, kulcs: str, _urlopen=urllib.request.urlopen) -> str:
+    """Ország és irányítószám alapján település feloldása."""
+    if not orszag.strip() or not irsz.strip():
+        raise TavolsagHiba("Hiányzó ország vagy irányítószám.")
+    query = urllib.parse.urlencode({
+        "components": f"country:{orszag.strip()}|postal_code:{irsz.strip()}",
+        "language": "hu", "key": kulcs,
+    })
+    try:
+        with _urlopen(f"{GEOCODING_URL}?{query}", timeout=IDOKORLAT_S) as valasz:
+            adat = json.loads(valasz.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        raise TavolsagHiba(f"Geocoding lekérdezési hiba: {exc}") from exc
+    status = adat.get("status")
+    if status != "OK":
+        if status == "ZERO_RESULTS":
+            raise TavolsagHiba("Nem található település ehhez az irányítószámhoz.")
+        raise TavolsagHiba(f"Geocoding API: {adat.get('error_message') or status or 'ismeretlen hiba'}")
+    for eredmeny in adat.get("results", []):
+        elemek = eredmeny.get("address_components", [])
+        kodok = [c.get("long_name", "").upper() for c in elemek if "postal_code" in c.get("types", [])]
+        if kodok and irsz.strip().upper() not in kodok:
+            continue
+        for tipus in ("locality", "postal_town", "administrative_area_level_3", "administrative_area_level_2"):
+            for c in elemek:
+                if tipus in c.get("types", []) and c.get("long_name"):
+                    return c["long_name"]
+    raise TavolsagHiba("A Google nem adott vissza egyértelmű települést; adja meg kézzel.")
+
+
 def utvonal_link(honnan: str, hova: str) -> str:
     """Nyilvános Google Maps útvonal-link (kulcs nem kell) – kézi km-ellenőrzéshez."""
     q = urllib.parse.urlencode({"api": 1, "origin": honnan, "destination": hova, "travelmode": "driving"})
